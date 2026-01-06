@@ -1,11 +1,9 @@
-import Login from "./components/authentication/Login";
-import Register from "./components/authentication/Register";
+import LandingPage from "./components/LandingPage/LandingPage";
 
 function App() {
   return (
     <>
-      <Login />
-      <Register />
+      <LandingPage />
     </>
   )
 }
