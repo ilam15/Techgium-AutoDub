@@ -1,11 +1,10 @@
 import Login from "./components/authentication/Login";
-import Register from "./components/authentication/Register";
+import InputPage from "./components/InputPage";
 
 function App() {
   return (
     <>
-      <Login />
-      <Register />
+      <InputPage />
     </>
   )
 }
