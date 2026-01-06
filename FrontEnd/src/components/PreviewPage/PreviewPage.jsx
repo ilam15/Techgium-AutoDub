@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 // import axios from 'axios'; // Keeping axios import as requested, even if unused for now
 
 const PreviewPage = ({
@@ -61,8 +62,11 @@ const PreviewPage = ({
         console.log('Downloading video...');
     };
 
+    const navigate = useNavigate();
+
     const handleBack = () => {
         console.log('Going back...');
+        navigate('/input');
     };
 
     const handleSubmit = () => {
