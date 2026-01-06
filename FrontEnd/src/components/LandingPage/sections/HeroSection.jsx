@@ -1,10 +1,12 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import megaphone from '../../../assets/megaphone.png';
 import abstractWaves from '../../../assets/abstract_waves.png';
 import microphone from '../../../assets/microphone.png';
 import purpleRibbed from '../../../assets/purple_ribbed.png';
 
 const HeroSection = () => {
+    const navigate = useNavigate();
     return (
         <section
             className="w-full"
@@ -65,7 +67,9 @@ const HeroSection = () => {
                         <h3 className="text-xl font-bold text-gray-900 mb-8 leading-tight">
                             Get Your Quotation For<br />Dubbing Today!
                         </h3>
-                        <button className="bg-black text-white text-[10px] font-bold px-6 py-3 rounded-full w-fit flex items-center gap-2 group-hover:bg-gray-800 transition-colors uppercase tracking-widest">
+                        <button
+                            onClick={() => navigate('/input')}
+                            className="bg-black text-white text-[10px] font-bold px-6 py-3 rounded-full w-fit flex items-center gap-2 group-hover:bg-gray-800 transition-colors uppercase tracking-widest">
                             Let's Talk
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-3 h-3 group-hover:translate-x-1 transition-transform">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />

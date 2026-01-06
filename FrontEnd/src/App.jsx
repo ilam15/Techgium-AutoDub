@@ -7,13 +7,9 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import Navbar from "./components/LandingPage/sections/Navbar";
 
 const Layout = () => {
-  const location = useLocation();
-  const hideNavbarPaths = ['/login', '/register'];
-  const showNavbar = !hideNavbarPaths.includes(location.pathname);
-
   return (
     <>
-      {showNavbar && <Navbar />}
+      <Navbar />
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
