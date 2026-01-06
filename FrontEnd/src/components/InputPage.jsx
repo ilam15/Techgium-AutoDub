@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import './InputPage.css';
 
 const InputPage = () => {
@@ -27,6 +28,7 @@ const InputPage = () => {
 
     const fileInputRef = useRef(null);
     const dropZoneRef = useRef(null);
+    const navigate = useNavigate();
 
     // Mock data for languages with more properties - Added more languages
     const languages = [
@@ -297,24 +299,15 @@ const InputPage = () => {
                     setIsProcessing(false);
 
                     // Reset tone settings to 0 after successful generation
-                    // Reset tone settings to 0 after successful generation
                     resetToneSettings();
 
-                    // Reset other states to initial values
-                    setUploadedVideo(null);
-                    setVideoUrl('');
-                    setSelectedLanguages(['es', 'fr', 'de']);
-                    setGlossaryFile(null);
-                    setUploadProgress({});
-                    setSpeakerMappings([
-                        { id: 1, name: 'Speaker 1', gender: 'Female', targetLang: 'es', voiceClone: false },
-                        { id: 2, name: 'Speaker 2', gender: 'Male', targetLang: 'de', voiceClone: false }
-                    ]);
-
-                    // Show completion message
-                    setTimeout(() => {
-                        alert(`🎉 Video generation complete!\n\nTarget languages: ${selectedLanguages.length}\nEstimated processing time: 3.20 mins\n\nYour video is being processed and will be available shortly.`);
-                    }, 500);
+                    // Navigate to preview page with video data
+                    navigate('/preview', {
+                        state: {
+                            video: uploadedVideo,
+                            languages: selectedLanguages
+                        }
+                    });
 
                     return 100;
                 }
