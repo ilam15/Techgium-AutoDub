@@ -1,5 +1,5 @@
 import Login from "./components/authentication/Login";
-import InputPage from "./components/InputPage";
+import InputPage from "./components/InputPage/InputPage";
 import LandingPage from "./components/LandingPage/LandingPage";
 import PreviewPage from './components/PreviewPage/PreviewPage';
 import Register from "./components/authentication/Register";
