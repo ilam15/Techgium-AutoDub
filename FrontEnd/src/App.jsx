@@ -12,8 +12,22 @@ const Layout = () => {
       <Navbar />
       <Routes>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={
+          <>
+            <LandingPage />
+            <div className="fixed inset-0 z-50">
+              <Login />
+            </div>
+          </>
+        } />
+        <Route path="/register" element={
+          <>
+            <LandingPage />
+            <div className="fixed inset-0 z-50">
+              <Register />
+            </div>
+          </>
+        } />
         <Route path="/input" element={<InputPage />} />
         <Route path="/preview" element={<PreviewPage />} />
       </Routes>
