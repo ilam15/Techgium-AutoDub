@@ -8,7 +8,7 @@ const InputPage = () => {
     const [useAiDetection, setUseAiDetection] = useState(true);
     const [uploadedVideo, setUploadedVideo] = useState(null);
     const [videoUrl, setVideoUrl] = useState('');
-    const [selectedLanguages, setSelectedLanguages] = useState(['es', 'fr', 'de']);
+    const [selectedLanguages, setSelectedLanguages] = useState([]);
     const [isDragging, setIsDragging] = useState(false);
     const [processingProgress, setProcessingProgress] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -32,7 +32,7 @@ const InputPage = () => {
 
     // Mock data for languages with more properties - Added more languages
     const languages = [
-        { code: 'es', name: 'Spanish LATAM', flag: '🇪🇸', progress: '93.7%', selected: false },
+        { code: 'es', name: 'Spanish', flag: '🇪🇸', progress: '93.7%', selected: false },
         { code: 'fr', name: 'French', flag: '🇫🇷', progress: '93.7%', selected: false },
         { code: 'de', name: 'German', flag: '🇩🇪', progress: '99.7%', selected: false },
         { code: 'ta', name: 'Tamil', flag: '🇮🇳', progress: '92.5%', selected: false },
@@ -181,15 +181,9 @@ const InputPage = () => {
         }
     };
 
-    // Language selection handler
+    // Language selection handler (Single Selection Mode)
     const handleLanguageSelect = (code) => {
-        setSelectedLanguages(prev => {
-            if (prev.includes(code)) {
-                return prev.filter(lang => lang !== code);
-            } else {
-                return [...prev, code];
-            }
-        });
+        setSelectedLanguages(prev => prev.includes(code) ? [] : [code]);
     };
 
     // Voice clone toggle
@@ -356,21 +350,33 @@ const InputPage = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 text-gray-800 font-sans selection:bg-blue-100 p-4 md:p-8 flex flex-col items-center">
+        <div className="min-h-screen bg-[conic-gradient(at_top_left,_var(--tw-gradient-stops))] from-indigo-100 via-purple-100 to-pink-100 text-gray-800 font-sans selection:bg-purple-100 p-4 md:p-8 flex flex-col items-center relative">
+            {/* Background Decorative Blobs */}
+            <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none -z-10">
+                <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-purple-300/30 blur-[100px] animate-pulse-slow"></div>
+                <div className="absolute top-[40%] -right-[10%] w-[40%] h-[40%] rounded-full bg-indigo-300/30 blur-[100px] animate-pulse-slow" style={{ animationDelay: '1s' }}></div>
+                <div className="absolute -bottom-[10%] left-[20%] w-[30%] h-[30%] rounded-full bg-pink-300/30 blur-[100px] animate-pulse-slow" style={{ animationDelay: '2s' }}></div>
+            </div>
+
             {/* Header */}
-            <header className="flex items-center gap-3 mb-8 animate-fade-in">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center p-0.5 shadow-lg shadow-blue-200 animate-pulse-slow">
-                    <div className="w-full h-full bg-white rounded-full flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+            <header className="flex items-center gap-3 mb-8 animate-fade-in z-10">
+                <div className="w-12 h-12 rounded-2xl bg-white/80 backdrop-blur-md flex items-center justify-center p-0.5 shadow-lg shadow-indigo-500/20 border border-white/50">
+                    <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                         </svg>
                     </div>
                 </div>
-                <h1 className="text-2xl font-bold tracking-wide bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent uppercase">
-                    Global Voice Engine
-                </h1>
+                <div>
+                    <h1 className="text-3xl font-black tracking-tight text-gray-900 leading-none">
+                        GLOBAL <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">VOICE ENGINE</span>
+                    </h1>
+                    <p className="text-xs font-semibold text-gray-500 tracking-widest mt-1 uppercase">Next-Gen AI Dubbing & Localization</p>
+                </div>
+
                 {isProcessing && (
-                    <div className="ml-4 px-3 py-1 bg-gradient-to-r from-blue-500 to-purple-500 text-white text-xs font-bold rounded-full animate-pulse">
+                    <div className="ml-6 px-4 py-1.5 bg-white/80 backdrop-blur-md border border-white/50 text-blue-600 text-xs font-bold rounded-full shadow-lg shadow-blue-500/20 flex items-center gap-2 animate-pulse">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></div>
                         PROCESSING {processingProgress.toFixed(0)}%
                     </div>
                 )}
@@ -380,7 +386,7 @@ const InputPage = () => {
             <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-3 gap-6">
 
                 {/* Column 1: Source Upload */}
-                <div className="bg-white rounded-3xl p-6 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col h-full relative overflow-hidden group transition-all duration-300 hover:shadow-2xl hover:shadow-blue-100/50">
+                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-indigo-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden group transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10 hover:-translate-y-1">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-purple-400"></div>
 
                     <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Source Upload</h2>
@@ -396,8 +402,8 @@ const InputPage = () => {
                     >
                         <div
                             className={`relative w-48 h-48 rounded-full border-4 border-dashed flex flex-col items-center justify-center p-4 transition-all duration-300 cursor-pointer ${isDragging
-                                ? 'border-blue-500 bg-blue-50 scale-110'
-                                : 'border-gray-200 bg-gray-50 hover:border-blue-400 hover:bg-blue-50/30'
+                                ? 'border-blue-500 bg-blue-50/50 scale-110'
+                                : 'border-indigo-200 bg-white/40 hover:border-blue-400 hover:bg-white/60'
                                 }`}
                             onClick={() => fileInputRef.current?.click()}
                         >
@@ -429,7 +435,7 @@ const InputPage = () => {
                                 value={videoUrl}
                                 onChange={(e) => setVideoUrl(e.target.value)}
                                 placeholder="Paste Video URL (YouTube, Vimeo, Bilibili)"
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all pr-24"
+                                className="w-full bg-white/50 backdrop-blur-sm border border-indigo-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all pr-24 placeholder-gray-400"
                             />
                             <button
                                 onClick={processUrl}
@@ -510,70 +516,28 @@ const InputPage = () => {
                 </div>
 
                 {/* Column 2: Localization Matrix */}
-                <div className="bg-white rounded-3xl p-6 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-purple-100/50">
+                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-purple-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-purple-500/10 hover:-translate-y-1">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-400 to-pink-400"></div>
 
                     <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Localization Matrix</h2>
 
                     {/* AI Detection Toggle */}
-                    <div className="bg-gradient-to-r from-gray-50 to-purple-50/30 rounded-xl p-4 mb-6 flex items-center justify-between border border-gray-100">
+                    <div className="bg-white/40 backdrop-blur-sm rounded-2xl p-4 mb-6 flex items-center justify-between border border-white/60 shadow-sm">
                         <div className="flex flex-col">
-                            <span className="text-xs font-bold text-gray-700">AI-POWERED LANGUAGE DETECTION</span>
-                            <span className="text-[10px] text-gray-400 mt-1">
+                            <span className="text-xs font-bold text-gray-700 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600">AI-POWERED LANGUAGE DETECTION</span>
+                            <span className="text-[10px] text-gray-500 mt-1 font-medium">
                                 Source Language: {sourceLang} - {useAiDetection ? '98%' : 'Manual'} Confidence
                             </span>
                         </div>
                         <div
-                            className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-all duration-300 ${useAiDetection ? 'bg-gradient-to-r from-blue-500 to-purple-500' : 'bg-gray-300'}`}
+                            className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-all duration-300 ${useAiDetection ? 'bg-gradient-to-r from-blue-500 to-purple-500 shadow-md shadow-purple-200' : 'bg-gray-200'}`}
                             onClick={() => setUseAiDetection(!useAiDetection)}
                         >
                             <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-300 ${useAiDetection ? 'translate-x-6' : 'translate-x-0'}`}></div>
                         </div>
                     </div>
 
-                    {/* Selected Languages Display Box */}
-                    <div className="mb-4">
-                        <div className="flex justify-between items-center mb-2">
-                            <span className="text-xs text-gray-500">
-                                Selected: <span className="font-bold text-purple-600">{selectedLanguages.length}</span> languages
-                            </span>
-                            <button
-                                onClick={() => setSelectedLanguages([])}
-                                className="text-[10px] text-red-500 hover:text-red-700 font-bold"
-                            >
-                                Clear All
-                            </button>
-                        </div>
-                        <div className="min-h-16 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
-                            {selectedLanguages.length > 0 ? (
-                                <div className="flex flex-wrap gap-2">
-                                    {selectedLanguages.map(code => {
-                                        const lang = languages.find(l => l.code === code);
-                                        return (
-                                            <div
-                                                key={code}
-                                                className="flex items-center gap-1 bg-white border border-purple-200 rounded-full px-3 py-1.5"
-                                            >
-                                                <span className="text-xs">{lang?.flag || '🌐'}</span>
-                                                <span className="text-xs font-medium text-gray-700">{lang?.name || code}</span>
-                                                <button
-                                                    onClick={() => removeSelectedLanguage(code)}
-                                                    className="ml-1 text-[10px] text-gray-400 hover:text-red-500"
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <div className="text-center py-4">
-                                    <span className="text-xs text-gray-400">No languages selected</span>
-                                    <p className="text-[10px] text-gray-300 mt-1">Click on languages below to add them</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
+
 
                     {/* Language Grid */}
                     <div className="grid grid-cols-3 gap-3">
@@ -581,9 +545,9 @@ const InputPage = () => {
                             <div
                                 key={lang.code}
                                 onClick={() => handleLanguageSelect(lang.code)}
-                                className={`border rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 group relative ${selectedLanguages.includes(lang.code)
-                                    ? 'border-purple-300 bg-purple-50/50 shadow-md shadow-purple-100'
-                                    : 'border-gray-100 hover:border-blue-300 hover:shadow-md'
+                                className={`border rounded-2xl p-3 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 group relative ${selectedLanguages.includes(lang.code)
+                                    ? 'border-purple-300/50 bg-gradient-to-br from-purple-50/80 to-pink-50/80 shadow-lg shadow-purple-500/10 backdrop-blur-sm'
+                                    : 'border-white/50 bg-white/30 hover:bg-white/60 hover:border-purple-200 hover:shadow-md'
                                     }`}
                             >
                                 <span className="text-2xl mb-2 group-hover:scale-110 transition-transform">{lang.flag}</span>
@@ -653,7 +617,7 @@ const InputPage = () => {
                 </div>
 
                 {/* Column 3: Voice Intelligence */}
-                <div className="bg-white rounded-3xl p-6 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-pink-100/50">
+                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-pink-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-pink-500/10 hover:-translate-y-1">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
 
                     <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Voice Intelligence</h2>
@@ -671,9 +635,9 @@ const InputPage = () => {
                             {speakerMappings.map((speaker) => (
                                 <div
                                     key={speaker.id}
-                                    className={`bg-gradient-to-r from-gray-50 to-white border rounded-lg p-3 flex items-center justify-between transition-all duration-300 ${speaker.voiceClone
+                                    className={`bg-white/40 backdrop-blur-sm border rounded-xl p-3 flex items-center justify-between transition-all duration-300 hover:bg-white/60 ${speaker.voiceClone
                                         ? 'border-pink-200 shadow-sm shadow-pink-100/50'
-                                        : 'border-gray-100'
+                                        : 'border-white/60'
                                         }`}
                                 >
                                     <div>
@@ -736,7 +700,7 @@ const InputPage = () => {
                         <div className="relative">
                             <div
                                 onClick={() => document.getElementById('glossary-upload').click()}
-                                className="bg-gradient-to-r from-gray-50 to-blue-50 border border-dashed border-gray-300 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all duration-300 group"
+                                className="bg-white/40 backdrop-blur-sm border border-dashed border-indigo-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-white/60 hover:border-blue-400 transition-all duration-300 group"
                             >
                                 <div className="w-8 h-8 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
                                     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
