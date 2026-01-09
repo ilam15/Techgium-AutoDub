@@ -1,0 +1,94 @@
+﻿python : C:\Users\sweth\AppD
+ata\Local\Programs\Python\Py
+thon39\lib\site-packages\tor
+ch\nn\modules\rnn.py:123: 
+UserWarning: dropout option 
+adds dropout after all but 
+last recurrent layer, so 
+non-zero dropout expects 
+num_layers greater than 1, 
+but got dropout=0.2 and 
+num_layers=1
+At line:1 char:1
++ python app.py --share 
+2>&1 | Out-File -Encoding 
+utf8 app_share_v2.log
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (C:\Us  
+  ers\sweth\...nd num_lay   
+ ers=1:String) [], Remot    
+eException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+  warnings.warn(
+C:\Users\sweth\AppData\Local
+\Programs\Python\Python39\li
+b\site-packages\torch\nn\uti
+ls\weight_norm.py:144: 
+FutureWarning: `torch.nn.uti
+ls.weight_norm` is 
+deprecated in favor of `torc
+h.nn.utils.parametrizations.
+weight_norm`.
+  WeightNorm.apply(module, 
+name, dim)
+[nltk_data] Downloading 
+package punkt to
+[nltk_data]     C:\Users\swe
+th\AppData\Roaming\nltk_data
+...
+[nltk_data]   Package punkt 
+is already up-to-date!
+Directory already exists: ./temp/kokoro_audio
+Traceback (most recent call 
+last):
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\app.py", line 
+1079, in <module>
+    main()
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\clic
+k\core.py", line 1161, in 
+__call__
+    return self.main(*args, 
+**kwargs)
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\clic
+k\core.py", line 1082, in 
+main
+    rv = self.invoke(ctx)
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\clic
+k\core.py", line 1443, in 
+invoke
+    return 
+ctx.invoke(self.callback, 
+**ctx.params)
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\clic
+k\core.py", line 788, in 
+invoke
+    return 
+__callback(*args, **kwargs)
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\app.py", line 
+1075, in main
+    demo.queue().launch(debu
+g=debug, share=share, 
+server_name="127.0.0.1", 
+api_open=False)
+TypeError: launch() got an 
+unexpected keyword argument 
+'api_open'

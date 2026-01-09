@@ -1,0 +1,23 @@
+﻿.\venv311\Scripts\python.exe
+ : [nltk_data] Downloading 
+package punkt to
+At line:1 char:29
++ ... l /F /IM python.exe; .
+\venv311\Scripts\python.exe 
+app.py 2>&1 | Out-F ...
++                          ~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: ([nltk  
+  _data] Downloading pack   
+ age punkt to:String) []    
+, RemoteException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+[nltk_data]     C:\Users\swe
+th\AppData\Roaming\nltk_data
+...
+[nltk_data]   Package punkt 
+is already up-to-date!
