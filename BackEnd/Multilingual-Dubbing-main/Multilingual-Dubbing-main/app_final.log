@@ -1,0 +1,67 @@
+﻿.\venv311\Scripts\python.exe
+ : Traceback (most recent 
+call last):
+At line:1 char:1
++ .\venv311\Scripts\python.e
+xe app.py 2>&1 | Out-File 
+-Encoding utf8 ap ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (Trace  
+  back (most recent call    
+ last)::String) [], Remo    
+teException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\app.py", line 
+431, in <module>
+    from kokoro_app import 
+single_tts
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\kokoro_app.py", 
+line 6, in <module>
+    from kokoro import 
+KPipeline
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\venv311\Lib\site-p
+ackages\kokoro\__init__.py",
+ line 23, in <module>
+    from .pipeline import 
+KPipeline
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\venv311\Lib\site-p
+ackages\kokoro\pipeline.py",
+ line 5, in <module>
+    from misaki import en, 
+espeak
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\venv311\Lib\site-p
+ackages\misaki\espeak.py", 
+line 10, in <module>
+    EspeakWrapper.set_data_p
+ath(espeakng_loader.get_data
+_path())
+    
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 
+'EspeakWrapper' has no 
+attribute 'set_data_path'. 
+Did you mean: 'data_path'?

@@ -26,15 +26,6 @@ const Footer = () => {
                     ))}
                 </div>
             </div>
-
-            <div className="flex flex-col md:flex-row justify-between items-center pt-8 border-t border-gray-100 text-sm font-medium text-gray-500">
-                <p>© 2024 AUTODUB. All rights reserved.</p>
-                <div className="flex gap-6 mt-4 md:mt-0">
-                    <p>Instagram</p>
-                    <p>Twitter</p>
-                    <p>LinkedIn</p>
-                </div>
-            </div>
         </footer>
     );
 };

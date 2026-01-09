@@ -1,0 +1,33 @@
+﻿.\venv311\Scripts\python.exe
+ : [nltk_data] Downloading 
+package punkt to
+At line:1 char:1
++ .\venv311\Scripts\python.e
+xe app.py 2>&1 | Out-File 
+-Encoding utf8 ap ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: ([nltk  
+  _data] Downloading pack   
+ age punkt to:String) []    
+, RemoteException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+[nltk_data]     C:\Users\swe
+th\AppData\Roaming\nltk_data
+...
+[nltk_data]   Package punkt 
+is already up-to-date!
+ERROR:    [Errno 10048] 
+error while attempting to 
+bind on address ('0.0.0.0', 
+7860): only one usage of 
+each socket address 
+(protocol/network 
+address/port) is normally 
+permitted
+Warning: Kokoro TTS not available: type object 'EspeakWrapper' has no attribute 'set_data_path'
+Kokoro TTS features will be disabled. Only Microsoft TTS will be available.
+Kokoro TTS is not available, skipping initialization

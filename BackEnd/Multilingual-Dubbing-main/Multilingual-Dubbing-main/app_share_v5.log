@@ -1,0 +1,99 @@
+﻿python : C:\Users\sweth\AppD
+ata\Local\Programs\Python\Py
+thon39\lib\site-packages\tor
+ch\nn\modules\rnn.py:123: 
+UserWarning: dropout option 
+adds dropout after all but 
+last recurrent layer, so 
+non-zero dropout expects 
+num_layers greater than 1, 
+but got dropout=0.2 and 
+num_layers=1
+At line:1 char:1
++ python app.py --share 
+2>&1 | Out-File -Encoding 
+utf8 app_share_v5.log
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (C:\Us  
+  ers\sweth\...nd num_lay   
+ ers=1:String) [], Remot    
+eException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+  warnings.warn(
+C:\Users\sweth\AppData\Local
+\Programs\Python\Python39\li
+b\site-packages\torch\nn\uti
+ls\weight_norm.py:144: 
+FutureWarning: `torch.nn.uti
+ls.weight_norm` is 
+deprecated in favor of `torc
+h.nn.utils.parametrizations.
+weight_norm`.
+  WeightNorm.apply(module, 
+name, dim)
+[nltk_data] Downloading 
+package punkt to
+[nltk_data]     C:\Users\swe
+th\AppData\Roaming\nltk_data
+...
+[nltk_data]   Package punkt 
+is already up-to-date!
+Directory already exists: ./temp/kokoro_audio
+Traceback (most recent call 
+last):
+  File "C:\Users\sweth\OneDr
+ive\Desktop\tech\Techgium-Au
+toDub\BackEnd\Multilingual-D
+ubbing-main\Multilingual-Dub
+bing-main\app.py", line 
+826, in <module>
+    import gradio as gr
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\grad
+io\__init__.py", line 3, in 
+<module>
+    import 
+gradio._simple_templates
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\grad
+io\_simple_templates\__init_
+_.py", line 1, in <module>
+    from .simpledropdown 
+import SimpleDropdown
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\grad
+io\_simple_templates\simpled
+ropdown.py", line 6, in 
+<module>
+    from 
+gradio.components.base 
+import Component, 
+FormComponent
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\grad
+io\components\__init__.py", 
+line 1, in <module>
+    from gradio.components.a
+nnotated_image import 
+AnnotatedImage
+  File "C:\Users\sweth\AppDa
+ta\Local\Programs\Python\Pyt
+hon39\lib\site-packages\grad
+io\components\annotated_imag
+e.py", line 10, in <module>
+    from gradio_client 
+import handle_file
+ImportError: cannot import 
+name 'handle_file' from 
+'gradio_client' (C:\Users\sw
+eth\AppData\Local\Programs\P
+ython\Python39\lib\site-pack
+ages\gradio_client\__init__.
+py)
