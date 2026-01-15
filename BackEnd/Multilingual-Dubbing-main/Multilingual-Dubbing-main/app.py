@@ -715,15 +715,15 @@ def separate_audio(source_path):
         save_at = os.path.join(base_path, "audio_data")
         os.makedirs(save_at, exist_ok=True)
 
-        # Use a system temporary folder to avoid conflicts
-        temp_folder = os.path.join(os.path.abspath(os.sep), "tmp", "audio_separate")
+        # Use a local temporary folder to avoid conflicts
+        temp_folder = os.path.join(base_path, "temp", "audio_separate")
         if os.path.exists(temp_folder):
             shutil.rmtree(temp_folder)
 
         os.makedirs(temp_folder, exist_ok=True)
 
         # Run the audio separator command
-        command = f"audio-separator {source_path} --model_filename UVR-MDX-NET-Inst_HQ_3.onnx --output_dir {temp_folder}"
+        command = f'audio-separator "{source_path}" --model_filename UVR-MDX-NET-Inst_HQ_3.onnx --output_dir "{temp_folder}"'
         result = subprocess.run(command, shell=True)
         vocal_path, noise_path = None, None
 
@@ -774,6 +774,10 @@ import os
 def recover_audio(input_file, tts_path):
     # Separate the input audio to get the background audio
     _, background_audio_path = separate_audio(input_file)
+
+    if background_audio_path is None:
+        print("Warning: Could not separate background audio. Using TTS audio only.")
+        return tts_path
 
     # Load the background and TTS audio
     background_audio = AudioSegment.from_file(background_audio_path)
@@ -828,8 +832,8 @@ def video_edit(video_path, new_audio_path):
 def replace_audio(video_path, new_audio_path, output_path):
     import torch
     gpu = torch.cuda.is_available()
-    command = f"ffmpeg -i {video_path} -i {new_audio_path} -map 0:v -map 1:a -c:v copy -shortest {output_path} -y"
-    gpu_command = f'ffmpeg -hwaccel cuda -i {video_path} -i {new_audio_path} -map 0:v -map 1:a -c:v copy -shortest {output_path} -y'
+    command = f'ffmpeg -i "{video_path}" -i "{new_audio_path}" -map 0:v -map 1:a -c:v copy -shortest "{output_path}" -y'
+    gpu_command = f'ffmpeg -hwaccel cuda -i "{video_path}" -i "{new_audio_path}" -map 0:v -map 1:a -c:v copy -shortest "{output_path}" -y'
     if gpu:
         command = gpu_command
     var=os.system(command)

@@ -1,0 +1,108 @@
+1
+00:00:00,000 --> 00:00:01,600
+ What if I told you that this chip
+
+2
+00:00:01,600 --> 00:00:03,220
+could solve problems faster than your
+
+3
+00:00:03,220 --> 00:00:06,400
+laptop? Well, not this one, but Google's new
+
+4
+00:00:06,400 --> 00:00:07,040
+Willow chip
+
+5
+00:00:07,040 --> 00:00:07,339
+might.
+
+6
+00:00:08,039 --> 00:00:10,580
+This quantum chip can solve problems in 5
+
+7
+00:00:10,580 --> 00:00:12,960
+minutes that would take a regular computer 10
+
+8
+00:00:12,960 --> 00:00:13,919
+sepilinears.
+
+9
+00:00:14,480 --> 00:00:16,199
+That's a 1 followed by 24
+
+10
+00:00:16,199 --> 00:00:16,640
+zeros.
+
+11
+00:00:18,539 --> 00:00:20,839
+Yeah, but don't cancel your laptop order just
+
+12
+00:00:20,839 --> 00:00:23,600
+yet. Experts say it's still experimental, like a
+
+13
+00:00:23,600 --> 00:00:24,199
+toddler solving
+
+14
+00:00:24,199 --> 00:00:24,660
+calculus.
+
+15
+00:00:26,280 --> 00:00:28,980
+Also, it works best at temperatures colder than
+
+16
+00:00:28,980 --> 00:00:29,500
+Antarctica.
+
+17
+00:00:30,559 --> 00:00:32,359
+So, no, it's not coming to your disk
+
+18
+00:00:32,359 --> 00:00:34,859
+soon. But hey, it's progress from medicines to
+
+19
+00:00:34,859 --> 00:00:35,100
+better
+
+20
+00:00:35,100 --> 00:00:36,820
+batteries. Willow could shape our
+
+21
+00:00:36,820 --> 00:00:39,200
+future. For now, let's stick to chips we
+
+22
+00:00:39,200 --> 00:00:39,340
+can
+
+23
+00:00:39,340 --> 00:00:39,579
+eat.
+
+24
+00:00:40,160 --> 00:00:41,920
+Quantum computers not just solve
+
+25
+00:00:41,920 --> 00:00:43,520
+problems. It redefines what's
+
+26
+00:00:43,520 --> 00:00:45,140
+possible. One qubit at a
+
+27
+00:00:45,140 --> 00:00:45,359
+time.
+
