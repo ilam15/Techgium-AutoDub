@@ -163,11 +163,15 @@ def edge_tts_pipeline(input_text,Language='English',voice_name=None,Gender='Male
   if long_sentence==False:
     if len(input_text)>500:
       long_sentence=True
-  if voice_name==None:
-    if Gender=="Male":
-      voice_name=male_voice_list[Language]
+  # If voice_name is provided but doesn't look like an edge-tts voice (e.g. "af_heart"), 
+  # or if we want to ensure gender switching, we force selecting from gender lists.
+  is_edge_voice = voice_name and ("Neural" in voice_name or "-" in voice_name)
+  
+  if not is_edge_voice:
     if Gender=="Female":
-      voice_name=female_voice_list[Language]
+      voice_name=female_voice_list.get(Language, female_voice_list.get("English"))
+    else:
+      voice_name=male_voice_list.get(Language, male_voice_list.get("English"))
   if long_sentence==True and translate_text_flag==True:
     chunks_list=make_chunks(input_text,Language)
   elif long_sentence==True and translate_text_flag==False:

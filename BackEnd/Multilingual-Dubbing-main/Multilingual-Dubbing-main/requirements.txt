@@ -15,5 +15,8 @@ librosa==0.10.2.post1
 fastapi
 uvicorn
 python-multipart
-#ctranslate2==3.24.0
-#ctranslate2==4.4.0
+pyannote.audio
+transformers
+pydub
+onnxruntime-gpu
+scipy

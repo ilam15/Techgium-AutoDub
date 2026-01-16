@@ -12,6 +12,7 @@ import uuid
 import shutil
 from static_ffmpeg import add_paths
 add_paths()
+from speaker_detection import SpeakerAnalyzer, get_speaker_for_segment
 
 
 def get_language_name(lang_code):
@@ -259,7 +260,9 @@ def generate_srt_from_sentences(sentence_timestamp, srt_path="default_subtitle.s
         for index, sentence in enumerate(sentence_timestamp):
             start_time = convert_time_to_srt_format(sentence['start'])
             end_time = convert_time_to_srt_format(sentence['end'])
-            srt_file.write(f"{index + 1}\n{start_time} --> {end_time}\n{sentence['text']}\n\n")
+            speaker = sentence.get('speaker', 'SPEAKER_00')
+            gender = sentence.get('gender', 'Male')
+            srt_file.write(f"{index + 1}\n{start_time} --> {end_time}\n<S:{speaker}|G:{gender}> {sentence['text']}\n\n")
 
 def get_audio_file(uploaded_file):
     global temp_folder
@@ -268,7 +271,7 @@ def get_audio_file(uploaded_file):
     shutil.copy(uploaded_file, file_path)
     return file_path
 
-def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8):
+def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8, hf_token=None):
   global language_dict,base_path,subtitle_folder
   #Load model
   if torch.cuda.is_available():
@@ -284,6 +287,11 @@ def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8):
   # compute_type = "int8"
   faster_whisper_model = WhisperModel("deepdml/faster-whisper-large-v3-turbo-ct2",device=device, compute_type=compute_type)
   audio_path=get_audio_file(uploaded_file)
+  
+  # Speaker Diarization and Gender Analysis
+  analyzer = SpeakerAnalyzer(hf_token=hf_token)
+  speaker_turns, speaker_genders = analyzer.analyze_audio(audio_path)
+  
   if Source_Language=="Automatic":
       segments,d = faster_whisper_model.transcribe(audio_path, word_timestamps=True)
       lang_code=d.language
@@ -294,6 +302,17 @@ def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8):
     src_lang=Source_Language
 
   sentence_timestamp,words_timestamp,text=format_segments(segments)
+  
+  # Assign speakers and genders to sentences
+  for sentence in sentence_timestamp:
+      if speaker_turns:
+          speaker = get_speaker_for_segment(sentence['start'], sentence['end'], speaker_turns)
+          sentence['speaker'] = speaker
+          sentence['gender'] = speaker_genders.get(speaker, "Male")
+      else:
+          # Fallback: Detect gender for this specific segment
+          sentence['speaker'] = "SPEAKER_00" 
+          sentence['gender'] = analyzer.identify_gender_for_segment(audio_path, sentence['start'], sentence['end'])
   if os.path.exists(audio_path):
     os.remove(audio_path)
   del faster_whisper_model
@@ -640,11 +659,12 @@ class SRTDubbing:
             text = i['text']
             actual_duration = i['end_time'] - i['start_time']
             pause_time = i['pause_time']
+            speaker_gender = i.get('gender', gender) # Use segment gender if available, else fallback to global
             slient_path = f"{new_folder_path}/{i['previous_pause']}"
             self.make_silence(pause_time, slient_path)
             join_path.append(slient_path)
             tts_path = f"{new_folder_path}/{i['audio_name']}"
-            self.text_to_speech_srt(text, tts_path, language, actual_duration,gender=gender,tts_model=tts_model,voice_name=voice_name)
+            self.text_to_speech_srt(text, tts_path, language, actual_duration,gender=speaker_gender,tts_model=tts_model,voice_name=voice_name)
             join_path.append(tts_path)
         self.concatenate_audio_files(join_path, dub_save_path)
 
@@ -679,11 +699,25 @@ class SRTDubbing:
                 start_time = SRTDubbing.convert_to_millisecond(time_info[0][0])
                 end_time = SRTDubbing.convert_to_millisecond(time_info[0][1])
 
+                text_raw = lines[i + 2].strip()
+                # Try to parse speaker/gender tags: <S:SPEAKER_00|G:Male> Text
+                match = re.match(r'<S:(.*?)\|G:(.*?)> (.*)', text_raw)
+                if match:
+                    speaker = match.group(1)
+                    gender = match.group(2)
+                    text = match.group(3)
+                else:
+                    speaker = "SPEAKER_00"
+                    gender = "Male" # Default
+                    text = text_raw
+
                 current_entry = {
                     'entry_number': entry_number,
                     'start_time': start_time,
                     'end_time': end_time,
-                    'text': lines[i + 2].strip(),
+                    'text': text,
+                    'speaker': speaker,
+                    'gender': gender,
                     'pause_time': start_time - previous_end_time if entry_number != 1 else start_time - default_start,
                     'audio_name': audio_name_template.format(entry_number),
                     'previous_pause': previous_pause_template.format(entry_number),
@@ -870,7 +904,7 @@ target_lang_list.extend(available_language)
 
 
 def subtitle_maker(Audio_or_Video_File, Source_Language, Destination_Language, subtitle_upload=None, Gender='Male',
-                   recover_music=False, make_video=False,tts_model="Kokoro TTS",voice_name="af_heart",max_words_per_subtitle=8):
+                   recover_music=False, make_video=False,tts_model="Kokoro TTS",voice_name="af_heart",max_words_per_subtitle=8, hf_token=None):
     src_lang = None  # Ensure src_lang is initialized
     default_srt_path = None
     customize_srt_path = None
@@ -881,7 +915,7 @@ def subtitle_maker(Audio_or_Video_File, Source_Language, Destination_Language, s
 
     if subtitle_upload is None:
         try:
-            default_srt_path, customize_srt_path, word_level_srt_path, shorts_srt_name, text_path, src_lang = whisper_subtitle(Audio_or_Video_File, Source_Language, max_words_per_subtitle=max_words_per_subtitle)
+            default_srt_path, customize_srt_path, word_level_srt_path, shorts_srt_name, text_path, src_lang = whisper_subtitle(Audio_or_Video_File, Source_Language, max_words_per_subtitle=max_words_per_subtitle, hf_token=hf_token)
         except Exception as e:
             print(f"Error in whisper_subtitle: {e}")
             src_lang = Source_Language  # Assign a default language if an error occurs
@@ -912,7 +946,7 @@ def subtitle_maker(Audio_or_Video_File, Source_Language, Destination_Language, s
 
     # if src_lang and src_lang != Destination_Language:
     try:
-        default_srt_path, customize_srt_path, word_level_srt_path, shorts_srt_name, text_path, src_lang = whisper_subtitle(dubb_voice, Destination_Language, max_words_per_subtitle=max_words_per_subtitle)
+        default_srt_path, customize_srt_path, word_level_srt_path, shorts_srt_name, text_path, src_lang = whisper_subtitle(dubb_voice, Destination_Language, max_words_per_subtitle=max_words_per_subtitle, hf_token=hf_token)
     except Exception as e:
         print(f"Error in whisper_subtitle (second call): {e}")
         default_srt_path, customize_srt_path, word_level_srt_path, shorts_srt_name, text_path, src_lang = None, None, None, None, None, None

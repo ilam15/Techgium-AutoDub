@@ -38,7 +38,8 @@ async def dub_video(
     target_lang: str = Form(...),
     gender: str = Form("Male"),
     recover_background_noise: str = Form("false"), # FormData sends booleans as strings often
-    make_video: str = Form("true")
+    make_video: str = Form("true"),
+    hf_token: str = Form(None)
 ):
     try:
         # Convert string booleans
@@ -76,7 +77,8 @@ async def dub_video(
             Gender=gender,
             recover_music=recover_bg,
             make_video=do_make_video,
-            subtitle_upload=None
+            subtitle_upload=None,
+            hf_token=hf_token
         )
         
         # Unpack results based on inspection of app.py
