@@ -15,7 +15,7 @@ modules = [
     "deep_translator", "edge_tts", "nltk", "ctranslate2", 
     "librosa", "pydub", "tqdm", "huggingface_hub", 
     "audio_separator", "transformers", "num2words", 
-    "phonemizer", "loguru", "static_ffmpeg"
+    "phonemizer", "loguru", "static_ffmpeg", "dotenv"
 ]
 
 print("--- Dependency Check ---")

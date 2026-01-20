@@ -1,7 +1,11 @@
 # Python virtual environment
 venv/
 venv311/
-.env/
+
+# Environment variables (contains secrets)
+.env
+
+# Generated documentation files
 HF_TOKEN_CONFIGURED.md
 START_WITH_DIARIZATION.bat
 

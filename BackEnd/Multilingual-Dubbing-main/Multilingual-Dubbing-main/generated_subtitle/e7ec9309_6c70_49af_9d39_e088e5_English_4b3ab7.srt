@@ -1,0 +1,20 @@
+1
+00:00:00,000 --> 00:00:08,599
+<S:SPEAKER_00|G:Male> Hi, I'm Sarnathya. I'm from Palaji. I completed my schooling at ARB International School and I'm currently pursuing my Bachelor of Technology at Sreyeswar.
+
+2
+00:00:08,800 --> 00:00:15,179
+<S:SPEAKER_00|G:Female> I have strong technical skills in C, C++ and Java. I love to do coding and develop small applications.
+
+3
+00:00:15,480 --> 00:00:25,160
+<S:SPEAKER_00|G:Female> I'm a quick learner and always interested in improving myself. I do coding on regular basis to improve my fundamentals and love to take up small challenges which help me think better.
+
+4
+00:00:25,160 --> 00:00:31,140
+<S:SPEAKER_00|G:Female> I'm open to learning new things and technologies which help me better myself and improve myself.
+
+5
+00:00:31,379 --> 00:00:36,240
+<S:SPEAKER_00|G:Male> My goal is to become a software developer and contribute to innovation and technologies. Thank you.
+

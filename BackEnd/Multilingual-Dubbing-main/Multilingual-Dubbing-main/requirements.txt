@@ -20,3 +20,4 @@ transformers
 pydub
 onnxruntime-gpu
 scipy
+python-dotenv

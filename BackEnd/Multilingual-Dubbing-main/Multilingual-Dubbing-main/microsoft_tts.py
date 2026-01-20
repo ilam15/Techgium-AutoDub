@@ -40,14 +40,20 @@ def calculate_rate_string(input_value):
 
 
 def make_chunks(input_text, language):
-    language="English"
-    if language == "English":
-      filtered_list=chunks_sentences(input_text, join_limit=2)
-      # temp_list = input_text.strip().split(".")
-      # filtered_list = [element.strip() + '.' for element in temp_list[:-1] if element.strip() and element.strip() != "'" and element.strip() != '"']
-      # if temp_list[-1].strip():
-      #     filtered_list.append(temp_list[-1].strip())
-      return filtered_list
+    # Determine which sentence splitter to use. 
+    # For languages not well-supported by sent_tokenize, we can fall back to manual splitting.
+    try:
+        filtered_list = chunks_sentences(input_text, join_limit=2)
+    except:
+        # Fallback manual split for languages that might fail NLTK sent_tokenize
+        temp_list = re.split(r'([.!?。！？])', input_text)
+        filtered_list = []
+        for i in range(0, len(temp_list)-1, 2):
+            filtered_list.append(temp_list[i] + temp_list[i+1])
+        if len(temp_list) % 2 != 0 and temp_list[-1]:
+            filtered_list.append(temp_list[-1])
+            
+    return filtered_list
 
 
 
@@ -169,9 +175,9 @@ def edge_tts_pipeline(input_text,Language='English',voice_name=None,Gender='Male
   
   if not is_edge_voice:
     if Gender=="Female":
-      voice_name=female_voice_list.get(Language, female_voice_list.get("English"))
+      voice_name=female_voice_list.get(Language, female_voice_list.get("English", "en-US-AvaMultilingualNeural"))
     else:
-      voice_name=male_voice_list.get(Language, male_voice_list.get("English"))
+      voice_name=male_voice_list.get(Language, male_voice_list.get("English", "en-US-BrianMultilingualNeural"))
   if long_sentence==True and translate_text_flag==True:
     chunks_list=make_chunks(input_text,Language)
   elif long_sentence==True and translate_text_flag==False:

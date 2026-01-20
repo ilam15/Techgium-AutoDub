@@ -3,9 +3,8 @@ echo ========================================
 echo   Techgium AutoDub with Speaker Diarization
 echo ========================================
 echo.
-echo Setting up Hugging Face token for speaker detection...
-set HF_TOKEN=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
-echo Token configured successfully!
+echo Loading configuration from .env file...
+echo Token will be loaded automatically from .env
 echo.
 echo Cleaning up old processes...
 taskkill /F /IM python.exe 2>nul

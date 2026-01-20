@@ -4,6 +4,10 @@ import librosa
 import numpy as np
 import warnings
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # Suppress noisy library warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*torchcodec.*")
@@ -16,7 +20,8 @@ add_paths()
 
 class SpeakerAnalyzer:
     def __init__(self, hf_token=None):
-        self.hf_token = hf_token or os.environ.get("HF_TOKEN")
+        # Priority: 1) Passed token, 2) Environment variable from .env
+        self.hf_token = hf_token or os.getenv("HF_TOKEN")
         self.diarization_pipeline = None
         self.gender_pipeline = None
         self.device = 0 if torch.cuda.is_available() else -1

@@ -343,9 +343,10 @@ from utils import language_dict
 import pysrt
 from deep_translator import GoogleTranslator
 
-def translate_text(text, Source_Language, Destination_Language):
+def translate_text(text, Source_Language, Destination_Language, max_retries=3):
     """
-    Translates the given text using GoogleTranslator.
+    Translates the given text using GoogleTranslator, preserving speaker/gender tags.
+    Implements retry logic with exponential backoff for connection errors.
     """
     # If source and destination are the same, return original text
     if Source_Language == Destination_Language:
@@ -362,25 +363,65 @@ def translate_text(text, Source_Language, Destination_Language):
     if source_language == target_language:
         return text
 
-    try:
-        translator = GoogleTranslator(source=source_language, target=target_language)
-        translation = translator.translate(text.strip())
-        return str(translation)
-    except Exception as e:
-        print(f"Translation error: {e}. Returning original text.")
+    # Extract tags: <S:SPEAKER_00|G:Male> Text
+    tag_match = re.match(r'(<S:.*?\|G:.*?>) (.*)', text)
+    if tag_match:
+        tag = tag_match.group(1)
+        actual_text = tag_match.group(2)
+    else:
+        tag = ""
+        actual_text = text
+
+    if not actual_text.strip():
         return text
+    
+    # Retry logic with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            translator = GoogleTranslator(source=source_language, target=target_language)
+            translation = translator.translate(actual_text.strip())
+            
+            if tag:
+                # Ensure the tag is preserved exactly as it was
+                return f"{tag} {str(translation)}"
+            else:
+                return str(translation)
+                
+        except (ConnectionResetError, ConnectionAbortedError, ConnectionError) as e:
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 0.5  # Exponential backoff: 0.5s, 1s, 2s
+                print(f"Connection error on attempt {attempt + 1}/{max_retries}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"Translation failed after {max_retries} attempts: {e}. Returning original text.")
+                # Return original text with tag if present
+                return text
+                
+        except Exception as e:
+            print(f"Translation error: {e}. Returning original text.")
+            return text
+    
+    return text
 
 def translate_subtitle(subtitles, Source_Language, Destination_Language):
     """
     Translates subtitles while preserving their timing.
+    Includes rate limiting to prevent API throttling.
     """
     global language_dict
     store_text = ""
-    for subtitle in subtitles:
+    total_subtitles = len(subtitles)
+    
+    for idx, subtitle in enumerate(subtitles):
         # Translate the text of each subtitle
         text_translated = translate_text(subtitle.text, Source_Language, Destination_Language)
         subtitle.text = text_translated  # Update the subtitle text
         store_text += text_translated.strip() + " "  # Use translated text for storing
+        
+        # Add a small delay every 10 subtitles to prevent rate limiting
+        if (idx + 1) % 10 == 0:
+            print(f"Translated {idx + 1}/{total_subtitles} subtitles...")
+            time.sleep(0.5)  # 500ms delay to avoid overwhelming the API
 
     return subtitles, store_text
 
@@ -701,11 +742,14 @@ class SRTDubbing:
 
                 text_raw = lines[i + 2].strip()
                 # Try to parse speaker/gender tags: <S:SPEAKER_00|G:Male> Text
-                match = re.match(r'<S:(.*?)\|G:(.*?)> (.*)', text_raw)
+                # Use a more robust regex that ignores case and extra spaces
+                match = re.match(r'<\s*S\s*:\s*(.*?)\s*\|\s*G\s*:\s*(.*?)\s*>\s*(.*)', text_raw, re.IGNORECASE)
                 if match:
-                    speaker = match.group(1)
-                    gender = match.group(2)
-                    text = match.group(3)
+                    speaker = match.group(1).strip()
+                    # Standardize gender to 'Male' or 'Female'
+                    gender_str = match.group(2).strip().lower()
+                    gender = "Female" if "female" in gender_str or "woman" in gender_str or "பெண்" in gender_str else "Male"
+                    text = match.group(3).strip()
                 else:
                     speaker = "SPEAKER_00"
                     gender = "Male" # Default
@@ -932,7 +976,7 @@ def subtitle_maker(Audio_or_Video_File, Source_Language, Destination_Language, s
         tra_srt_name = os.path.basename(default_srt_path).replace(".srt", f"_{Destination_Language}.srt")
         output_srt_path = f"{subtitle_folder}/{tra_srt_name}"
         translated_subtitles.save(output_srt_path, encoding='utf-8')
-        dubb_voice = dubbing(output_srt_path, Destination_Language, gender=Gender)
+        dubb_voice = dubbing(output_srt_path, Destination_Language, gender=Gender, tts_model=tts_model, voice_name=voice_name)
     else:
         output_srt_path = default_srt_path
         dubb_voice = dubbing(output_srt_path, Destination_Language, gender=Gender,tts_model=tts_model,voice_name=voice_name)
