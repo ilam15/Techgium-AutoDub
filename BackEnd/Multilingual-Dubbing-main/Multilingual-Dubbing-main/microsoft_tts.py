@@ -75,6 +75,7 @@ def tts_file_name(text):
 from pydub import AudioSegment
 import shutil
 import os
+import time
 def merge_audio_files(audio_paths, output_path):
     # Initialize an empty AudioSegment
     merged_audio = AudioSegment.silent(duration=0)
@@ -109,12 +110,20 @@ def edge_free_tts(chunks_list,speed,voice_name,save_path,translate_text_flag,Lan
       store_text+=text+" "
       text=text.replace('"',"")
       edge_command=f'edge-tts  --rate={calculate_rate_string(speed)}% --voice {voice_name} --text "{text}" --write-media {edge_folder}/edge_tts_voice/{k}.mp3'
-      var1=os.system(edge_command)
-      if var1==0:
-        pass
-      else:
-        print(f"Failed: {i}")
-        print(edge_command)
+      # Retry logic
+      max_retries = 3
+      for attempt in range(max_retries):
+          var1 = os.system(edge_command)
+          if var1 == 0:
+              break
+          print(f"Attempt {attempt+1} failed for chunk. Retrying in 2 seconds...")
+          time.sleep(2)
+
+      if var1 != 0:
+          print(f"Failed permanently: {i}")
+          print(edge_command)
+          # Stop processing to avoid downstream errors
+          raise Exception(f"Edge TTS failed to generate audio for chunk: {i}")
       chunk_audio_list.append(f"{edge_folder}/edge_tts_voice/{k}.mp3")
       k+=1
     # print(chunk_audio_list)
@@ -127,12 +136,19 @@ def edge_free_tts(chunks_list,speed,voice_name,save_path,translate_text_flag,Lan
     text=text.replace('"',"")
     store_text+=text+" "
     edge_command=f'edge-tts  --rate={calculate_rate_string(speed)}% --voice {voice_name} --text "{text}" --write-media {save_path}'
-    var2=os.system(edge_command)
-    if var2==0:
-      pass
-    else:
-      print(f"Failed: {chunks_list[0]}")
+    # Retry logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        var2 = os.system(edge_command)
+        if var2 == 0:
+            break
+        print(f"Attempt {attempt+1} failed for single chunk. Retrying in 2 seconds...")
+        time.sleep(2)
+
+    if var2 != 0:
+      print(f"Failed permanently: {chunks_list[0]}")
       print(edge_command)
+      raise Exception(f"Edge TTS failed to generate audio for text: {chunks_list[0]}")
   with open("./temp.txt", "w", encoding="utf-8") as text_file:
     text_file.write(store_text)
   return save_path
