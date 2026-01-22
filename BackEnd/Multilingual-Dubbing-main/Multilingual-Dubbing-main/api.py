@@ -70,7 +70,11 @@ async def dub_video(
         # It returns new_video twice?
         
         # Let's handle the return values carefully.
-        results = subtitle_maker(
+        # Call the core processing logic from app.py in a threadpool to avoid blocking
+        from fastapi.concurrency import run_in_threadpool
+        
+        results = await run_in_threadpool(
+            subtitle_maker,
             Audio_or_Video_File=file_path,
             Source_Language=source_lang,
             Destination_Language=target_lang,

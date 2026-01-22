@@ -13,6 +13,25 @@ import shutil
 from static_ffmpeg import add_paths
 add_paths()
 from speaker_detection import SpeakerAnalyzer, get_speaker_for_segment
+from concurrent.futures import ThreadPoolExecutor
+
+# Global model cache
+_whisper_model = None
+_speaker_analyzer = None
+
+def get_whisper_model(device, compute_type):
+    global _whisper_model
+    if _whisper_model is None:
+        print("Loading Whisper Model...")
+        _whisper_model = WhisperModel("deepdml/faster-whisper-large-v3-turbo-ct2", device=device, compute_type=compute_type)
+    return _whisper_model
+
+def get_speaker_analyzer(hf_token=None):
+    global _speaker_analyzer
+    if _speaker_analyzer is None:
+        print("Loading Speaker Analyzer...")
+        _speaker_analyzer = SpeakerAnalyzer(hf_token=hf_token)
+    return _speaker_analyzer
 
 
 def get_language_name(lang_code):
@@ -285,11 +304,16 @@ def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8, hf_
       compute_type = "int8"
   # device = "cpu"
   # compute_type = "int8"
-  faster_whisper_model = WhisperModel("deepdml/faster-whisper-large-v3-turbo-ct2",device=device, compute_type=compute_type)
+  
+  # Use cached model
+  faster_whisper_model = get_whisper_model(device, compute_type)
+  
   audio_path=get_audio_file(uploaded_file)
   
   # Speaker Diarization and Gender Analysis
-  analyzer = SpeakerAnalyzer(hf_token=hf_token)
+  # Use cached analyzer
+  analyzer = get_speaker_analyzer(hf_token=hf_token)
+  
   speaker_turns, speaker_genders = analyzer.analyze_audio(audio_path)
   
   if Source_Language=="Automatic":
@@ -315,9 +339,11 @@ def whisper_subtitle(uploaded_file,Source_Language,max_words_per_subtitle=8, hf_
           sentence['gender'] = analyzer.identify_gender_for_segment(audio_path, sentence['start'], sentence['end'])
   if os.path.exists(audio_path):
     os.remove(audio_path)
-  del faster_whisper_model
-  gc.collect()
-  torch.cuda.empty_cache()
+  
+  # Removed aggressive model deletion to keep models in memory for speed
+  # del faster_whisper_model
+  # gc.collect()
+  # torch.cuda.empty_cache()
 
   word_segments=combine_word_segments(words_timestamp, max_words_per_subtitle=max_words_per_subtitle, min_silence_between_words=0.5)
   shorts_segments=custom_word_segments(words_timestamp, min_silence_between_words=0.3, max_characters_per_subtitle=17)
@@ -403,25 +429,31 @@ def translate_text(text, Source_Language, Destination_Language, max_retries=3):
     
     return text
 
+def translate_chunk(subtitle, Source_Language, Destination_Language):
+    try:
+        translated_text = translate_text(subtitle.text, Source_Language, Destination_Language)
+        return translated_text
+    except Exception as e:
+        print(f"Translation failed for chunk: {e}")
+        return subtitle.text
+
 def translate_subtitle(subtitles, Source_Language, Destination_Language):
     """
-    Translates subtitles while preserving their timing.
-    Includes rate limiting to prevent API throttling.
+    Translates subtitles in parallel using ThreadPoolExecutor.
     """
     global language_dict
     store_text = ""
-    total_subtitles = len(subtitles)
+    # total_subtitles = len(subtitles)
     
-    for idx, subtitle in enumerate(subtitles):
-        # Translate the text of each subtitle
-        text_translated = translate_text(subtitle.text, Source_Language, Destination_Language)
-        subtitle.text = text_translated  # Update the subtitle text
-        store_text += text_translated.strip() + " "  # Use translated text for storing
-        
-        # Add a small delay every 10 subtitles to prevent rate limiting
-        if (idx + 1) % 10 == 0:
-            print(f"Translated {idx + 1}/{total_subtitles} subtitles...")
-            time.sleep(0.5)  # 500ms delay to avoid overwhelming the API
+    # Use ThreadPoolExecutor for parallel translation
+    # 10 workers is a reasonable balance for API rate limits vs speed
+    # Using map to maintain order easily
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(lambda sub: translate_text(sub.text, Source_Language, Destination_Language), subtitles))
+
+    for i, subtitle in enumerate(subtitles):
+        subtitle.text = results[i]
+        store_text += results[i].strip() + " "
 
     return subtitles, store_text
 
@@ -629,42 +661,64 @@ class SRTDubbing:
 
     @staticmethod
     def text_to_speech_srt(text, audio_path, language, actual_duration,gender='Male',tts_model="Kokoro TTS",voice_name="af_heart"):
-        tts_filename = f"{base_path}/temp.wav"
-        your_tts(text,language,gender,tts_filename,actual_duration,speed=1.0,tts_model=tts_model,voice_name=voice_name)
-        # Check the duration of the generated TTS audio
-        tts_audio = AudioSegment.from_file(tts_filename)
-        tts_duration = len(tts_audio)
+        # Use unique temp filenames to avoid race conditions in parallel execution
+        unique_id = uuid.uuid4().hex
+        tts_filename = f"{base_path}/temp_{unique_id}.wav"
+        
+        try:
+            your_tts(text,language,gender,tts_filename,actual_duration,speed=1.0,tts_model=tts_model,voice_name=voice_name)
+            
+            if not os.path.exists(tts_filename):
+                print(f"Warning: TTS failed to generate file for text: {text[:20]}...")
+                return
 
-        if actual_duration == 0:
-            # If actual duration is zero, use the original TTS audio without modifications
-            shutil.move(tts_filename, audio_path)
-            return
-        # If TTS audio duration is longer than actual duration, speed up the audio
-        if tts_duration > actual_duration:
-            speedup_factor = tts_duration / actual_duration
-            speedup_filename = f"{base_path}/speedup_temp.wav"
-            # Use ffmpeg to change audio speed
-            subprocess.run([
-                "ffmpeg",
-                "-i", tts_filename,
-                "-filter:a", f"atempo={speedup_factor}",
-                speedup_filename,
-                "-y"
-            ], check=True)
+            # Check the duration of the generated TTS audio
+            tts_audio = AudioSegment.from_file(tts_filename)
+            tts_duration = len(tts_audio)
 
-            # Replace the original TTS audio with the sped-up version
-            shutil.move(speedup_filename, audio_path)
-        elif tts_duration < actual_duration:
-            # If TTS audio duration is less than actual duration, add silence to match the duration
-            silence_gap = actual_duration - tts_duration
-            silence = AudioSegment.silent(duration=int(silence_gap))
-            new_audio = tts_audio + silence
+            if actual_duration == 0:
+                # If actual duration is zero, use the original TTS audio without modifications
+                shutil.move(tts_filename, audio_path)
+                return
+            
+            # If TTS audio duration is longer than actual duration, speed up the audio
+            if tts_duration > actual_duration:
+                speedup_factor = tts_duration / actual_duration
+                speedup_filename = f"{base_path}/speedup_temp_{unique_id}.wav"
+                # Use ffmpeg to change audio speed
+                # Silence ffmpeg output to reduce log clutter
+                subprocess.run([
+                    "ffmpeg",
+                    "-i", tts_filename,
+                    "-filter:a", f"atempo={speedup_factor}",
+                    speedup_filename,
+                    "-y"
+                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # Save the new audio with added silence
-            new_audio.export(audio_path, format="wav")
-        else:
-            # If TTS audio duration is equal to actual duration, use the original TTS audio
-            shutil.move(tts_filename, audio_path)
+                # Replace the original TTS audio with the sped-up version
+                shutil.move(speedup_filename, audio_path)
+                
+            elif tts_duration < actual_duration:
+                # If TTS audio duration is less than actual duration, add silence to match the duration
+                silence_gap = actual_duration - tts_duration
+                silence = AudioSegment.silent(duration=int(silence_gap))
+                new_audio = tts_audio + silence
+
+                # Save the new audio with added silence
+                new_audio.export(audio_path, format="wav")
+            else:
+                # If TTS audio duration is equal to actual duration, use the original TTS audio
+                shutil.move(tts_filename, audio_path)
+                
+        except Exception as e:
+            print(f"Error in text_to_speech_srt: {e}")
+        finally:
+            # Clean up temp file if it still exists (e.g. was used for input but not moved)
+            if os.path.exists(tts_filename):
+                try:
+                    os.remove(tts_filename)
+                except:
+                    pass
 
     @staticmethod
     def make_silence(pause_time, pause_save_path):
@@ -695,18 +749,45 @@ class SRTDubbing:
         result = self.read_srt_file(srt_file_path)
         new_folder_path = self.create_folder_for_srt(srt_file_path)
         join_path = []
-        for i in tqdm(result):
-        # for i in result:
-            text = i['text']
-            actual_duration = i['end_time'] - i['start_time']
-            pause_time = i['pause_time']
-            speaker_gender = i.get('gender', gender) # Use segment gender if available, else fallback to global
-            slient_path = f"{new_folder_path}/{i['previous_pause']}"
-            self.make_silence(pause_time, slient_path)
-            join_path.append(slient_path)
-            tts_path = f"{new_folder_path}/{i['audio_name']}"
-            self.text_to_speech_srt(text, tts_path, language, actual_duration,gender=speaker_gender,tts_model=tts_model,voice_name=voice_name)
-            join_path.append(tts_path)
+        
+        # Prepare tasks for parallel execution
+        futures = []
+        # Maintain order with a list of (index, path)
+        results_map = {}
+
+
+        print(f"Generating TTS for {len(result)} segments...")
+        
+        with ThreadPoolExecutor(max_workers=10) as executor: 
+            for index, i in enumerate(result):
+                text = i['text']
+                actual_duration = i['end_time'] - i['start_time']
+                pause_time = i['pause_time']
+                speaker_gender = i.get('gender', gender)
+                
+                # Handle silence (fast, no need to parallelize but keep order)
+                silent_path = f"{new_folder_path}/{i['previous_pause']}"
+                self.make_silence(pause_time, silent_path)
+                
+                tts_path = f"{new_folder_path}/{i['audio_name']}"
+                
+                # Submit TTS task
+                future = executor.submit(
+                    self.text_to_speech_srt, 
+                    text, tts_path, language, actual_duration, 
+                    gender=speaker_gender, tts_model=tts_model, voice_name=voice_name
+                )
+                futures.append((index, future, silent_path, tts_path))
+
+            # Wait for all and assemble join_path in order
+            for index, future, silent_path, tts_path in tqdm(futures):
+                try:
+                    future.result() # Wait for completion
+                    join_path.append(silent_path)
+                    join_path.append(tts_path)
+                except Exception as e:
+                    print(f"Error generating TTS for segment {index}: {e}")
+
         self.concatenate_audio_files(join_path, dub_save_path)
 
     @staticmethod

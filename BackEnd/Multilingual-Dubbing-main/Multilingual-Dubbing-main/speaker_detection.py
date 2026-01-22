@@ -110,7 +110,17 @@ class SpeakerAnalyzer:
         try:
             from pydub import AudioSegment
             audio = AudioSegment.from_file(audio_path)
-            segment = audio[int(start * 1000):int(end * 1000)]
+            # Optimize: Limit analysis to max 2 seconds to speed up pyin
+            duration_ms = int((end - start) * 1000)
+            analysis_duration = min(duration_ms, 2000) 
+            
+            # Take the middle part if longer than 2s, or just the beginning
+            start_ms = int(start * 1000)
+            if duration_ms > 2000:
+                 offset = (duration_ms - 2000) // 2
+                 start_ms += offset
+            
+            segment = audio[start_ms : start_ms + analysis_duration]
             
             # Convert to numpy
             samples = np.array(segment.get_array_of_samples()).astype(np.float32)
