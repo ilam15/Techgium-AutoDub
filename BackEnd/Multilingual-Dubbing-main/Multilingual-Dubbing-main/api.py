@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -11,6 +11,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app import subtitle_maker
+from clean_up import cleanup_unnecessary_files
 
 app = FastAPI()
 
@@ -33,6 +34,7 @@ def read_root():
 
 @app.post("/dub_video")
 async def dub_video(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     source_lang: str = Form(...),
     target_lang: str = Form(...),
@@ -111,6 +113,10 @@ async def dub_video(
             if path.startswith("./"): path = path[2:]
             elif path.startswith("/"): path = path[1:]
             return f"http://localhost:8000/static/{path}"
+
+        # Schedule cleanup task
+        keep_files = [new_video_path, dubb_voice_path, file_path]
+        background_tasks.add_task(cleanup_unnecessary_files, keep_files=keep_files)
 
         return {
             "status": "success",
