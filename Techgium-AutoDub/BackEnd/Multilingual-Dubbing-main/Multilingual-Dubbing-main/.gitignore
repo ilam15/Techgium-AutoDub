@@ -1,0 +1,14 @@
+# Python virtual environment
+venv/
+venv311/
+
+# Environment variables (contains secrets)
+.env
+
+# Generated documentation files
+HF_TOKEN_CONFIGURED.md
+START_WITH_DIARIZATION.bat
+
+# Python cache
+__pycache__/
+*.pyc
