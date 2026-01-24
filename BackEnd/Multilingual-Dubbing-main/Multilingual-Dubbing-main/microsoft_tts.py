@@ -43,17 +43,11 @@ NLLB_LANG_MAP = {
 }
 
 # ===============================
-# Load NLLB-200 ONCE
+# Translation Engine Accessor
 # ===============================
-print("Loading NLLB-200 translation model...")
-
-translator = pipeline(
-    "translation",
-    model="facebook/nllb-200-distilled-600M",
-    device=0 if torch.cuda.is_available() else -1
-)
-
-print("NLLB-200 loaded successfully")
+def get_translator():
+    from core.models import model_manager
+    return model_manager.get_translator()
 
 
 # ===============================
@@ -67,6 +61,7 @@ def translate_text(text, Language):
     if not tgt_lang:
         raise ValueError(f"Unsupported language: {Language}")
 
+    translator = get_translator()
     result = translator(
         text.strip(),
         src_lang="eng_Latn",   # Change only if ASR source is not English
@@ -129,6 +124,7 @@ def merge_audio_files(audio_paths, output_path):
 
 def mp3_to_wav(mp3_file, wav_file):
     audio = AudioSegment.from_mp3(mp3_file)
+    audio = audio.set_frame_rate(24000).set_channels(1)
     audio.export(wav_file, format="wav")
 
 
@@ -145,6 +141,7 @@ def remove_silence(file_path, output_path):
     for chunk in chunks:
         combined += chunk
 
+    combined = combined.set_frame_rate(24000).set_channels(1)
     combined.export(output_path, format="wav")
     return output_path
 
@@ -152,55 +149,37 @@ def remove_silence(file_path, output_path):
 # ===============================
 # Edge TTS Core
 # ===============================
+import asyncio
+import edge_tts
+
+async def _stream_edge_tts(text, voice, rate, save_path):
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    await communicate.save(save_path)
+
 def edge_free_tts(chunks_list, speed, voice_name, save_path, translate_text_flag, Language):
     store_text = ""
-
-    if len(chunks_list) > 1:
-        chunk_audio_list = []
-
-        edge_voice_dir = f"{edge_folder}/edge_tts_voice"
-        if os.path.exists(edge_voice_dir):
-            shutil.rmtree(edge_voice_dir)
-        os.mkdir(edge_voice_dir)
-
-        for idx, chunk in enumerate(chunks_list, start=1):
-            text = translate_text(chunk, Language) if translate_text_flag else chunk
-            store_text += text + " "
-            text = text.replace('"', "")
-
-            out_mp3 = f"{edge_voice_dir}/{idx}.mp3"
-            cmd = (
-                f'edge-tts --rate={calculate_rate_string(speed)}% '
-                f'--voice {voice_name} --text "{text}" --write-media {out_mp3}'
-            )
-
-            for attempt in range(3):
-                if os.system(cmd) == 0:
-                    break
-                time.sleep(2)
-            else:
-                raise RuntimeError(f"Edge TTS failed: {chunk}")
-
-            chunk_audio_list.append(out_mp3)
-
-        merge_audio_files(chunk_audio_list, save_path)
-
-    else:
-        text = translate_text(chunks_list[0], Language) if translate_text_flag else chunks_list[0]
+    rate_str = f"{calculate_rate_string(speed)}%"
+    
+    # Simple one-chunk or multi-chunk handling
+    full_text = ""
+    for chunk in chunks_list:
+        text = translate_text(chunk, Language) if translate_text_flag else chunk
         store_text += text + " "
-        text = text.replace('"', "")
+        full_text += text + " "
+    
+    full_text = full_text.strip().replace('"', "")
+    
+    if not full_text:
+        return save_path
 
-        cmd = (
-            f'edge-tts --rate={calculate_rate_string(speed)}% '
-            f'--voice {voice_name} --text "{text}" --write-media {save_path}'
-        )
-
-        for attempt in range(3):
-            if os.system(cmd) == 0:
-                break
-            time.sleep(2)
-        else:
-            raise RuntimeError(f"Edge TTS failed: {text}")
+    # Use asyncio to run the library call
+    try:
+        asyncio.run(_stream_edge_tts(full_text, voice_name, rate_str, save_path))
+    except Exception as e:
+        print(f"Edge TTS (Library) failed: {e}. Falling back to CLI.")
+        # Minimal fallback to CLI if library fails unexpectedly
+        cmd = f'edge-tts --rate={rate_str} --voice {voice_name} --text "{full_text}" --write-media {save_path}'
+        os.system(cmd)
 
     with open("./temp.txt", "w", encoding="utf-8") as f:
         f.write(store_text)
