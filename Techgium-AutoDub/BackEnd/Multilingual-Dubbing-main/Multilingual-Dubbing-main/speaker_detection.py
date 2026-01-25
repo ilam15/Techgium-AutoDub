@@ -72,34 +72,86 @@ class SpeakerAnalyzer:
             # Final fallback
             self.gender_pipeline = None
 
-    def analyze_audio(self, audio_path):
+    def analyze_audio(self, audio_path_or_data):
         """
         Returns speaker turns and their identified genders.
+        Accepts either a file path or a NumPy array of audio data.
         """
         if not self.diarization_pipeline:
             print("Diarization pipeline not available.")
             return [], {}
 
-        print(f"Diarizing audio: {audio_path}")
+        print(f"Diarizing audio...")
         try:
-            diarization = self.diarization_pipeline(audio_path)
+            import numpy as np
+            if isinstance(audio_path_or_data, np.ndarray):
+                # Pyannote pipeline expects a dict for in-memory audio
+                audio_input = {
+                    "waveform": torch.from_numpy(audio_path_or_data).unsqueeze(0),
+                    "sample_rate": 16000
+                }
+                diarization = self.diarization_pipeline(audio_input)
+            else:
+                diarization = self.diarization_pipeline(audio_path_or_data)
             
+            # Robust check for different return types
             speaker_turns = []
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                speaker_turns.append({
-                    "start": turn.start,
-                    "end": turn.end,
-                    "speaker": speaker
-                })
+            iterator = None
+            
+            # Case 1: Standard Pyannote Annotation object
+            if hasattr(diarization, "itertracks"):
+                iterator = diarization.itertracks(yield_label=True)
+            if iterator is None:
+                # Fallback: check all attributes for anything that looks like an annotation or list
+                for attr_name in dir(diarization):
+                    if not attr_name.startswith("_"):
+                        attr_val = getattr(diarization, attr_name)
+                        if hasattr(attr_val, "itertracks"):
+                            print(f"Found tracks in attribute: {attr_name}")
+                            iterator = attr_val.itertracks(yield_label=True)
+                            break
+                        elif isinstance(attr_val, (list, tuple)) and len(attr_val) > 0:
+                            print(f"Found tracks in list attribute: {attr_name}")
+                            iterator = attr_val
+                            break
+            
+            if iterator is None:
+                print(f"Warning: Unexpected diarization output type: {type(diarization)}. Attributes: {dir(diarization)}")
+                # One last attempt: if it's subscriptsable but not a dict
+                try:
+                    target = diarization["annotation"] if "annotation" in dir(diarization) or hasattr(diarization, "__getitem__") else diarization
+                    if hasattr(target, "itertracks"):
+                        iterator = target.itertracks(yield_label=True)
+                    else:
+                        iterator = iter(target)
+                except:
+                    iterator = []
+
+            for turn_info in iterator:
+                # Handle different iteration formats
+                if len(turn_info) == 3: # (segment, track, label)
+                    turn, _, speaker = turn_info
+                    speaker_turns.append({
+                        "start": turn.start,
+                        "end": turn.end,
+                        "speaker": speaker
+                    })
+                elif hasattr(turn_info, "start"): # direct segment objects
+                    speaker_turns.append({
+                        "start": turn_info.start,
+                        "end": turn_info.end,
+                        "speaker": getattr(turn_info, "speaker", "SPEAKER_00")
+                    })
                 
             print(f"Found {len(set(s['speaker'] for s in speaker_turns))} speakers.")
             
-            # Identify gender for each speaker
-            speaker_genders = self._identify_speaker_genders(audio_path, speaker_turns)
+            speaker_genders = self._identify_speaker_genders(audio_path_or_data, speaker_turns)
             
             return speaker_turns, speaker_genders
         except Exception as e:
             print(f"Diarization failed: {e}")
+            import traceback
+            traceback.print_exc()
             return [], {}
 
     def identify_gender_for_segment(self, audio_path, start, end):
@@ -158,14 +210,20 @@ class SpeakerAnalyzer:
             print(f"Segment gender detection failed: {e}")
             return "Male"
 
-    def _identify_speaker_genders(self, audio_path, turns):
+    def _identify_speaker_genders(self, audio_path_or_data, turns):
         if not self.gender_pipeline:
             return {}
 
         print("Identifying speaker genders...")
         try:
-            # Load audio for gender analysis
-            y, sr = librosa.load(audio_path, sr=16000)
+            import numpy as np
+            sr = 16000
+            if isinstance(audio_path_or_data, np.ndarray):
+                y = audio_path_or_data
+            else:
+                # Load audio for gender analysis
+                y, _ = librosa.load(audio_path_or_data, sr=sr)
+            
             speaker_samples = {}
             
             # Collect representative samples for each speaker
@@ -226,20 +284,40 @@ class SpeakerAnalyzer:
 def get_speaker_for_segment(start, end, speaker_turns):
     """
     Finds the speaker with the most overlap for a given segment.
+    Uses time-weighted overlap for high precision.
     """
     if not speaker_turns:
         return "SPEAKER_00"
         
-    max_overlap = 0
-    best_speaker = speaker_turns[0]["speaker"]
+    overlap_map = {}
     
     for turn in speaker_turns:
         overlap_start = max(start, turn["start"])
         overlap_end = min(end, turn["end"])
         overlap = max(0, overlap_end - overlap_start)
         
-        if overlap > max_overlap:
-            max_overlap = overlap
-            best_speaker = turn["speaker"]
+        if overlap > 0:
+            speaker = turn["speaker"]
+            overlap_map[speaker] = overlap_map.get(speaker, 0) + overlap
             
-    return best_speaker
+    if not overlap_map:
+        # Fallback: find nearest speaker if no direct overlap
+        nearest_speaker = speaker_turns[0]["speaker"]
+        min_dist = float('inf')
+        for turn in speaker_turns:
+            dist = min(abs(start - turn["end"]), abs(end - turn["start"]))
+            if dist < min_dist:
+                min_dist = dist
+                nearest_speaker = turn["speaker"]
+        return nearest_speaker
+        
+    return max(overlap_map.items(), key=lambda x: x[1])[0]
+
+def assign_word_speakers(words, speaker_turns):
+    """
+    Assigns a speaker to each individual word based on diarization timing.
+    Essential for perfect word-level subtitles and gender matching.
+    """
+    for word in words:
+        word['speaker'] = get_speaker_for_segment(word['start'], word['end'], speaker_turns)
+    return words
