@@ -2,6 +2,8 @@ import os
 from pydantic_settings import BaseSettings
 from typing import Optional
 
+import torch
+
 class Settings(BaseSettings):
     # App Settings
     APP_NAME: str = "AutoDub Engine"
@@ -10,9 +12,12 @@ class Settings(BaseSettings):
     TEMP_DIR: str = os.path.join(BASE_DIR, "temp")
     
     # ML Model Settings
-    DEVICE: str = "cuda" if os.environ.get("USE_GPU", "true").lower() == "true" else "cpu"
+    # DEVICE checks actual availability
+    DEVICE: str = "cuda" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "cpu"
     WHISPER_MODEL_NAME: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
-    COMPUTE_TYPE: str = "float16" # "float16", "int8_float16", "int8"
+    
+    # Use int8 on CPU to avoid float16 errors
+    COMPUTE_TYPE: str = "float16" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "int8"
     HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
     MODEL_IDLE_TIMEOUT: int = 300 # Seconds
     
