@@ -38,8 +38,9 @@ class ModelManager:
                         compute_type=settings.COMPUTE_TYPE
                     )
                 except Exception as e:
-                    if "CUDA" in str(e) and settings.DEVICE == "cuda":
-                        logger.warning(f"CUDA initialization failed ({e}). Falling back to CPU mode.")
+                    error_msg = str(e).lower()
+                    if ("cuda" in error_msg or "cublas" in error_msg or "library" in error_msg) and settings.DEVICE == "cuda":
+                        logger.warning(f"CUDA/cuBLAS initialization failed ({e}). Falling back to CPU mode.")
                         self._models["whisper"] = WhisperModel(
                             settings.WHISPER_MODEL_NAME, 
                             device="cpu", 
