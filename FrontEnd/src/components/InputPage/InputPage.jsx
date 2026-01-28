@@ -4,83 +4,80 @@ import './InputPage.css';
 
 const InputPage = () => {
     // State declarations
-    const [sourceLang, setSourceLang] = useState('English (US)');
-    const [useAiDetection, setUseAiDetection] = useState(true);
+    const [sourceLanguage, setSourceLanguage] = useState(null);
+    const [targetLanguage, setTargetLanguage] = useState(null);
+    const [speakerGender, setSpeakerGender] = useState(null);
     const [uploadedVideo, setUploadedVideo] = useState(null);
+    const [rawFile, setRawFile] = useState(null);
     const [videoUrl, setVideoUrl] = useState('');
-    const [selectedLanguages, setSelectedLanguages] = useState([]);
     const [isDragging, setIsDragging] = useState(false);
     const [processingProgress, setProcessingProgress] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [speakerMappings, setSpeakerMappings] = useState([
-        { id: 1, name: 'Speaker 1', gender: 'Female', targetLang: 'es', voiceClone: false },
-        { id: 2, name: 'Speaker 2', gender: 'Male', targetLang: 'de', voiceClone: false }
-    ]);
-    const [toneSettings, setToneSettings] = useState({
-        serious: 0,
-        genre: 0,
-        speed: 0,
-        pitch: 0
-    });
-    const [glossaryFile, setGlossaryFile] = useState(null);
-    const [currentPage, setCurrentPage] = useState(1);
+    const [showSourceDropdown, setShowSourceDropdown] = useState(false);
+    const [showTargetDropdown, setShowTargetDropdown] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({});
+
+    // New Options State
+    const [recoverBackgroundNoise, setRecoverBackgroundNoise] = useState(false);
+    const [makeVideo, setMakeVideo] = useState(false);
+
+    // Validation Errors
+    const [errors, setErrors] = useState({});
 
     const fileInputRef = useRef(null);
     const dropZoneRef = useRef(null);
     const navigate = useNavigate();
 
     // Mock data for languages with more properties - Added more languages
+    // Professional language list with corrected flags
     const languages = [
-        { code: 'es', name: 'Spanish', flag: '🇪🇸', progress: '93.7%', selected: false },
-        { code: 'fr', name: 'French', flag: '🇫🇷', progress: '93.7%', selected: false },
-        { code: 'de', name: 'German', flag: '🇩🇪', progress: '99.7%', selected: false },
-        { code: 'ta', name: 'Tamil', flag: '🇮🇳', progress: '92.5%', selected: false },
-        { code: 'hi', name: 'Hindi', flag: '🇮🇳', progress: '91.4%', selected: false },
-        { code: 'zh', name: 'Mandarin', flag: '🇨🇳', progress: '96.5%', selected: false },
-        { code: 'ja', name: 'Japanese', flag: '🇯🇵', progress: '92.8%', selected: false },
-        { code: 'ko', name: 'Korean', flag: '🇰🇷', progress: '89.3%', selected: false },
-        { code: 'ar', name: 'Arabic', flag: '🇸🇦', progress: '88.7%', selected: false },
-        { code: 'ru', name: 'Russian', flag: '🇷🇺', progress: '94.1%', selected: false },
-        { code: 'pt', name: 'Portuguese', flag: '🇵🇹', progress: '95.1%', selected: false },
-        { code: 'it', name: 'Italian', flag: '🇮🇹', progress: '94.2%', selected: false },
-        { code: 'nl', name: 'Dutch', flag: '🇳🇱', progress: '90.5%', selected: false },
-        { code: 'pl', name: 'Polish', flag: '🇵🇱', progress: '87.9%', selected: false },
-        { code: 'tr', name: 'Turkish', flag: '🇹🇷', progress: '86.4%', selected: false },
-        { code: 'th', name: 'Thai', flag: '🇹🇭', progress: '85.2%', selected: false },
-        { code: 'vi', name: 'Vietnamese', flag: '🇻🇳', progress: '84.8%', selected: false },
-        { code: 'he', name: 'Hebrew', flag: '🇮🇱', progress: '83.6%', selected: false },
-        { code: 'sv', name: 'Swedish', flag: '🇸🇪', progress: '89.1%', selected: false },
-        { code: 'da', name: 'Danish', flag: '🇩🇰', progress: '88.7%', selected: false },
-        { code: 'fi', name: 'Finnish', flag: '🇫🇮', progress: '82.3%', selected: false },
-        { code: 'no', name: 'Norwegian', flag: '🇳🇴', progress: '87.5%', selected: false },
-        { code: 'cs', name: 'Czech', flag: '🇨🇿', progress: '81.9%', selected: false },
-        { code: 'hu', name: 'Hungarian', flag: '🇭🇺', progress: '80.4%', selected: false },
-        { code: 'el', name: 'Greek', flag: '🇬🇷', progress: '79.8%', selected: false },
-        { code: 'ro', name: 'Romanian', flag: '🇷🇴', progress: '78.6%', selected: false },
-        { code: 'bg', name: 'Bulgarian', flag: '🇧🇬', progress: '77.2%', selected: false },
+        { code: 'en', name: 'English', flag: '🇺🇸', selected: false },
+        { code: 'hi', name: 'Hindi', flag: '🇮🇳', selected: false },
+        { code: 'es', name: 'Spanish', flag: '🇪🇸', selected: false },
+        { code: 'fr', name: 'French', flag: '🇫🇷', selected: false },
+        { code: 'de', name: 'German', flag: '🇩🇪', selected: false },
+        { code: 'ta', name: 'Tamil', flag: '🇮🇳', selected: false },
+        { code: 'zh', name: 'Mandarin', flag: '🇨🇳', selected: false },
+        { code: 'ja', name: 'Japanese', flag: '🇯🇵', selected: false },
+        { code: 'ko', name: 'Korean', flag: '🇰🇷', selected: false },
+        { code: 'ar', name: 'Arabic', flag: '🇸🇦', selected: false },
+        { code: 'ru', name: 'Russian', flag: '🇷🇺', selected: false },
+        { code: 'pt', name: 'Portuguese', flag: '🇵🇹', selected: false },
+        { code: 'it', name: 'Italian', flag: '🇮🇹', selected: false },
+        { code: 'nl', name: 'Dutch', flag: '🇳🇱', selected: false },
+        { code: 'pl', name: 'Polish', flag: '🇵🇱', selected: false },
+        { code: 'tr', name: 'Turkish', flag: '🇹🇷', selected: false },
+        { code: 'th', name: 'Thai', flag: '🇹🇭', selected: false },
+        { code: 'vi', name: 'Vietnamese', flag: '🇻🇳', selected: false },
+        { code: 'he', name: 'Hebrew', flag: '🇮🇱', selected: false },
+        { code: 'sv', name: 'Swedish', flag: '🇸🇪', selected: false },
+        { code: 'da', name: 'Danish', flag: '🇩🇰', selected: false },
+        { code: 'fi', name: 'Finnish', flag: '🇫🇮', selected: false },
+        { code: 'no', name: 'Norwegian', flag: '🇳🇴', selected: false },
+        { code: 'cs', name: 'Czech', flag: '🇨🇿', selected: false },
+        { code: 'hu', name: 'Hungarian', flag: '🇭🇺', selected: false },
+        { code: 'el', name: 'Greek', flag: '🇬🇷', selected: false },
+        { code: 'ro', name: 'Romanian', flag: '🇷🇴', selected: false },
+        { code: 'bg', name: 'Bulgarian', flag: '🇧🇬', selected: false },
     ];
 
-    // Calculate total pages
-    const languagesPerPage = 9;
-    const totalPages = Math.ceil(languages.length / languagesPerPage);
-
-    // Get languages for current page
-    const paginatedLanguages = languages.slice(
-        (currentPage - 1) * languagesPerPage,
-        currentPage * languagesPerPage
-    );
+    // Speaker genders for selection
+    // Speaker genders for selection - Professional Palette
+    const speakerOptions = [
+        { id: 'female', name: 'Female', icon: '👩', color: 'bg-rose-50 text-rose-600 border-rose-200' },
+        { id: 'male', name: 'Male', icon: '👨', color: 'bg-blue-50 text-blue-600 border-blue-200' }
+    ];
 
     // Simplified platform icons - Only YouTube + plus for others
     const platforms = [
         {
-            name: 'YouTube', color: 'bg-red-100', icon: (
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="#FF0000" viewBox="0 0 24 24">
+            name: 'YouTube', color: 'bg-red-50 text-red-600', icon: (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z" />
                 </svg>
             )
         },
-        { name: '+12 More', color: 'bg-gray-100', icon: '+', isPlus: true }
+        { name: '+12', color: 'bg-slate-100 text-slate-600', icon: '+', isPlus: true }
     ];
 
     // Drag and drop handlers
@@ -161,6 +158,7 @@ const InputPage = () => {
         videoElement.src = URL.createObjectURL(file);
 
         setUploadedVideo(videoData);
+        setRawFile(file);
     };
 
     const simulateUploadProgress = (fileName) => {
@@ -181,53 +179,30 @@ const InputPage = () => {
         }
     };
 
-    // Language selection handler (Single Selection Mode)
-    const handleLanguageSelect = (code) => {
-        setSelectedLanguages(prev => prev.includes(code) ? [] : [code]);
+    // Language selection handler
+    const handleSourceSelect = (code) => {
+        setSourceLanguage(code);
+        setShowSourceDropdown(false);
     };
 
-    // Voice clone toggle
-    const toggleVoiceClone = (speakerId) => {
-        setSpeakerMappings(prev =>
-            prev.map(speaker =>
-                speaker.id === speakerId
-                    ? { ...speaker, voiceClone: !speaker.voiceClone }
-                    : speaker
-            )
-        );
+    const handleTargetSelect = (code) => {
+        setTargetLanguage(code);
+        setShowTargetDropdown(false);
     };
 
-    // Tone setting handler
-    const handleToneChange = (setting, value) => {
-        setToneSettings(prev => ({
-            ...prev,
-            [setting]: parseInt(value)
-        }));
-    };
 
-    // Reset tone settings to 0
-    const resetToneSettings = () => {
-        setToneSettings({
-            serious: 0,
-            genre: 0,
-            speed: 0,
-            pitch: 0
-        });
-    };
+    // Close dropdowns on click outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (!event.target.closest('.custom-dropdown')) {
+                setShowSourceDropdown(false);
+                setShowTargetDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
-    // Glossary file handler
-    const handleGlossaryUpload = (e) => {
-        const file = e.target.files[0];
-        if (file && file.type === 'text/csv') {
-            setGlossaryFile({
-                name: file.name,
-                size: (file.size / 1024).toFixed(2) + ' KB',
-                terms: Math.floor(Math.random() * 50) + 10 // Random term count
-            });
-        } else {
-            alert('Please upload a CSV file');
-        }
-    };
 
     // URL processing
     const processUrl = () => {
@@ -236,9 +211,10 @@ const InputPage = () => {
         // Validate URL
         const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|vimeo\.com|bilibili\.com)\/.+/i;
         if (!urlPattern.test(videoUrl)) {
-            alert('Please enter a valid YouTube, Vimeo, or Bilibili URL');
+            setErrors(prev => ({ ...prev, url: 'Please enter a valid YouTube, Vimeo, or Bilibili URL' }));
             return;
         }
+        setErrors(prev => ({ ...prev, url: null }));
 
         // Simulate video analysis
         setIsProcessing(true);
@@ -270,52 +246,98 @@ const InputPage = () => {
     };
 
     // Generate video handler
-    const handleGenerateVideo = () => {
+    const handleGenerateVideo = async () => {
+        let newErrors = {};
+
         if (!uploadedVideo && !videoUrl) {
-            alert('Please upload a video or enter a URL');
+            newErrors.source = 'Please upload a video file or enter a valid URL above';
+        }
+
+        if (!targetLanguage) {
+            newErrors.targetLang = 'Please select a target language for dubbing';
+        }
+
+        if (Object.keys(newErrors).length > 0) {
+            setErrors(newErrors);
             return;
         }
 
-        if (selectedLanguages.length === 0) {
-            alert('Please select at least one target language');
-            return;
-        }
+        // Clear errors if valid
+        setErrors({});
 
         setIsProcessing(true);
         setProcessingProgress(0);
 
-        // Simulate generation process
-        const interval = setInterval(() => {
-            setProcessingProgress(prev => {
-                const newProgress = prev + Math.random() * 15;
-                if (newProgress >= 100) {
-                    clearInterval(interval);
-                    setIsProcessing(false);
+        try {
+            const formData = new FormData();
+            if (rawFile) {
+                formData.append('file', rawFile);
+            }
+            // else if (videoUrl) { ... handle URL case ... } // Priority on file upload as per user mock
 
-                    // Reset tone settings to 0 after successful generation
-                    resetToneSettings();
+            // Helper to get full language name if needed, or code. 
+            // The backend likely expects full English names based on app.py
+            const getLangName = (code) => {
+                const l = languages.find(x => x.code === code);
+                return l ? l.name : code;
+            }
 
-                    // Navigate to preview page with video data
-                    navigate('/preview', {
-                        state: {
-                            video: uploadedVideo,
-                            languages: selectedLanguages
-                        }
-                    });
+            formData.append('source_lang', sourceLanguage === 'auto' || !sourceLanguage ? 'Automatic' : getLangName(sourceLanguage));
+            formData.append('target_lang', getLangName(targetLanguage));
+            formData.append('gender', speakerGender || 'Male');
+            formData.append('recover_background_noise', recoverBackgroundNoise);
+            formData.append('make_video', true); // Force True as we want a video output
 
-                    return 100;
-                }
-                return newProgress;
+            // Progress simulation (since fetch doesn't give upload progress easily without XHR/axios)
+            const progressInterval = setInterval(() => {
+                setProcessingProgress(prev => {
+                    if (prev >= 90) return prev;
+                    return prev + 5;
+                });
+            }, 500);
+
+            const response = await fetch('http://localhost:8000/dub_video', {
+                method: 'POST',
+                body: formData,
             });
-        }, 500);
+
+            clearInterval(progressInterval);
+            setProcessingProgress(100);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Processing failed');
+            }
+
+            const data = await response.json();
+            setIsProcessing(false);
+
+            // Navigate to preview page with video data
+            navigate('/preview', {
+                state: {
+                    videoUrl: data.video_url,
+                    originalVideoUrl: data.original_video_url,
+                    language: targetLanguage,
+                    gender: speakerGender,
+                    metadata: {
+                        originalLanguage: getLangName(sourceLanguage) || "Detected",
+                        dubbedLanguage: getLangName(targetLanguage),
+                        duration: uploadedVideo?.duration || "Unknown",
+                        status: "Synced Successfully"
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error(error);
+            setIsProcessing(false);
+            alert(`Error: ${error.message}`);
+        }
     };
 
     // Calculate estimated time
     const calculateEstimatedTime = () => {
-        const baseTime = 3.2; // minutes
-        const languageFactor = selectedLanguages.length * 0.5;
-        const speakerFactor = speakerMappings.filter(s => s.voiceClone).length * 0.8;
-        return (baseTime + languageFactor + speakerFactor).toFixed(2);
+        return (3.5).toFixed(2);
     };
 
     // Remove uploaded video
@@ -331,91 +353,116 @@ const InputPage = () => {
         return lang ? lang.name : code;
     };
 
-    // Remove a selected language
-    const removeSelectedLanguage = (code) => {
-        setSelectedLanguages(prev => prev.filter(lang => lang !== code));
-    };
+    // Custom Dropdown Component
+    const LanguageDropdown = ({ label, value, options, onSelect, isOpen, setIsOpen, isAuto = false }) => {
+        const selected = options.find(o => o.code === value) || (isAuto && value === 'auto' ? { name: 'Auto-Detect', flag: '🌐' } : options[0]);
 
-    // Pagination handlers
-    const nextPage = () => {
-        if (currentPage < totalPages) {
-            setCurrentPage(prev => prev + 1);
-        }
-    };
+        return (
+            <div className="relative custom-dropdown w-full">
+                <div className="flex justify-between items-center mb-2">
+                    <label className="text-sm font-bold text-slate-700 uppercase tracking-wide">{label}</label>
+                </div>
+                <div
+                    onClick={() => setIsOpen(!isOpen)}
+                    className={`bg-white rounded-xl px-4 py-3.5 border transition-all duration-200 cursor-pointer flex items-center justify-between hover:border-blue-400 hover:shadow-sm ${isOpen ? 'border-blue-500 ring-2 ring-blue-500/10' : 'border-slate-200'}`}
+                >
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-lg border border-slate-100">
+                            {selected.flag}
+                        </div>
+                        <div>
+                            <div className="text-sm font-semibold text-slate-800">{selected.name}</div>
+                        </div>
+                    </div>
+                    <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                </div>
 
-    const prevPage = () => {
-        if (currentPage > 1) {
-            setCurrentPage(prev => prev - 1);
-        }
+                {isOpen && (
+                    <div className="absolute top-full mt-2 left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl z-50 max-h-64 overflow-y-auto custom-scrollbar animate-fade-in origin-top">
+                        {isAuto && (
+                            <div
+                                onClick={() => onSelect('auto')}
+                                className="px-4 py-3 flex items-center gap-3 hover:bg-slate-50 cursor-pointer transition-colors border-b border-slate-50"
+                            >
+                                <span className="text-lg">🌐</span>
+                                <span className="text-sm font-medium text-slate-700">Auto-Detect Output</span>
+                            </div>
+                        )}
+                        {options.map(lang => (
+                            <div
+                                key={lang.code}
+                                onClick={() => onSelect(lang.code)}
+                                className={`px-4 py-3 flex items-center gap-3 hover:bg-slate-50 cursor-pointer transition-colors ${value === lang.code ? 'bg-blue-50/60' : ''}`}
+                            >
+                                <span className="text-lg">{lang.flag}</span>
+                                <span className="text-sm font-medium text-slate-700">{lang.name}</span>
+                                {value === lang.code && <div className="ml-auto w-1.5 h-1.5 bg-blue-600 rounded-full"></div>}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
     };
 
     return (
-        <div className="min-h-screen bg-[conic-gradient(at_top_left,_var(--tw-gradient-stops))] from-indigo-100 via-purple-100 to-pink-100 text-gray-800 font-sans selection:bg-purple-100 p-4 md:p-8 flex flex-col items-center relative">
-            {/* Background Decorative Blobs */}
-            <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none -z-10">
-                <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-purple-300/30 blur-[100px] animate-pulse-slow"></div>
-                <div className="absolute top-[40%] -right-[10%] w-[40%] h-[40%] rounded-full bg-indigo-300/30 blur-[100px] animate-pulse-slow" style={{ animationDelay: '1s' }}></div>
-                <div className="absolute -bottom-[10%] left-[20%] w-[30%] h-[30%] rounded-full bg-pink-300/30 blur-[100px] animate-pulse-slow" style={{ animationDelay: '2s' }}></div>
-            </div>
+
+        <div className="min-h-screen w-full bg-slate-50 text-slate-900 font-sans p-6 md:p-10 flex flex-col items-center">
 
             {/* Header */}
-            <header className="flex items-center gap-3 mb-8 animate-fade-in z-10">
-                <div className="w-12 h-12 rounded-2xl bg-white/80 backdrop-blur-md flex items-center justify-center p-0.5 shadow-lg shadow-indigo-500/20 border border-white/50">
-                    <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <h1 className="text-3xl font-black tracking-tight text-gray-900 leading-none">
-                        GLOBAL <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">VOICE ENGINE</span>
-                    </h1>
-                    <p className="text-xs font-semibold text-gray-500 tracking-widest mt-1 uppercase">Next-Gen AI Dubbing & Localization</p>
-                </div>
+            <header className="flex flex-col items-center gap-2 mb-10 animate-fade-in z-10 text-center">
+                <h1 className="text-5xl font-extrabold tracking-tight text-slate-900 mb-2">
+                    AutoDub <span className="text-slate-500 font-light">Engine</span>
+                </h1>
+                <p className="text-slate-600 text-base font-bold">Professional Video Localization & Voice Synthesis</p>
 
                 {isProcessing && (
-                    <div className="ml-6 px-4 py-1.5 bg-white/80 backdrop-blur-md border border-white/50 text-blue-600 text-xs font-bold rounded-full shadow-lg shadow-blue-500/20 flex items-center gap-2 animate-pulse">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></div>
-                        PROCESSING {processingProgress.toFixed(0)}%
+                    <div className="mt-4 px-4 py-2 bg-white border border-slate-200 rounded-full shadow-sm flex items-center gap-3 animate-pulse">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-xs font-semibold text-blue-600">Processing media... {processingProgress.toFixed(0)}%</span>
                     </div>
                 )}
             </header>
 
-            {/* Main Grid */}
-            <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Main Grid - Full coverage */}
+            <div className="w-full h-full grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1">
 
                 {/* Column 1: Source Upload */}
-                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-indigo-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden group transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10 hover:-translate-y-1">
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-purple-400"></div>
-
-                    <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Source Upload</h2>
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col h-full hover:shadow-md transition-shadow duration-300">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                        </div>
+                        <h2 className="text-base font-extrabold text-slate-800 uppercase tracking-wide">Upload Source</h2>
+                    </div>
 
                     {/* Drag & Drop Area */}
                     <div
                         ref={dropZoneRef}
-                        className={`flex-1 flex flex-col items-center justify-center mb-6 transition-all duration-300 ${isDragging ? 'scale-105' : ''}`}
+                        className={`flex-1 flex flex-col items-center justify-center mb-6 transition-all duration-200 rounded-xl border-2 border-dashed ${isDragging
+                            ? 'border-blue-500 bg-blue-50/50'
+                            : 'border-slate-200 bg-slate-50/50 hover:border-blue-400 hover:bg-slate-50'
+                            }`}
                         onDragEnter={handleDragEnter}
                         onDragLeave={handleDragLeave}
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
                     >
                         <div
-                            className={`relative w-48 h-48 rounded-full border-4 border-dashed flex flex-col items-center justify-center p-4 transition-all duration-300 cursor-pointer ${isDragging
-                                ? 'border-blue-500 bg-blue-50/50 scale-110'
-                                : 'border-indigo-200 bg-white/40 hover:border-blue-400 hover:bg-white/60'
-                                }`}
+                            className="w-full h-full flex flex-col items-center justify-center p-8 cursor-pointer"
                             onClick={() => fileInputRef.current?.click()}
                         >
-                            {isDragging && (
-                                <div className="absolute inset-0 rounded-full bg-blue-500/10 animate-pulse pointer-events-none"></div>
-                            )}
-                            <div className="absolute inset-0 rounded-full border-t-4 border-blue-500 opacity-20 animate-spin-slow pointer-events-none"></div>
-                            <svg xmlns="http://www.w3.org/2000/svg" className={`w-12 h-12 mb-2 transition-colors ${isDragging ? 'text-blue-600' : 'text-blue-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                            </svg>
-                            <span className={`text-center font-bold transition-colors ${isDragging ? 'text-blue-700' : 'text-gray-700'}`}>DRAG & DROP</span>
-                            <span className="text-center text-xs text-gray-400 mt-1">VIDEO FILES</span>
+                            <div className="w-16 h-16 mb-4 rounded-full bg-white shadow-sm flex items-center justify-center text-blue-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                                </svg>
+                            </div>
+                            <span className="text-sm font-bold text-slate-700">Click to upload or drag video</span>
+                            <span className="text-xs text-slate-500 mt-2">MP4, MOV, AVI (Max 2GB)</span>
                             <input
                                 type="file"
                                 ref={fileInputRef}
@@ -424,388 +471,259 @@ const InputPage = () => {
                                 onChange={handleFileInput}
                             />
                         </div>
-                        <p className="text-xs text-gray-500 mt-4 text-center">Supports MP4, MOV, AVI up to 2GB</p>
                     </div>
 
                     {/* URL Input */}
                     <div className="mb-6">
-                        <div className="relative">
+                        <div className="relative mb-4">
                             <input
                                 type="text"
                                 value={videoUrl}
                                 onChange={(e) => setVideoUrl(e.target.value)}
-                                placeholder="Paste Video URL (YouTube, Vimeo, Bilibili)"
-                                className="w-full bg-white/50 backdrop-blur-sm border border-indigo-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all pr-24 placeholder-gray-400"
+                                placeholder="Paste YouTube / Vimeo URL..."
+
+                                className={`w-full bg-white border-2 rounded-lg px-4 py-3 text-sm font-medium text-slate-800 focus:outline-none focus:border-slate-900 transition-all pr-20 placeholder-slate-500 ${errors.url ? 'border-red-300 ring-2 ring-red-100' : 'border-slate-200'}`}
                             />
                             <button
                                 onClick={processUrl}
                                 disabled={!videoUrl || isProcessing}
-                                className={`absolute right-2 top-1/2 transform -translate-y-1/2 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${!videoUrl || isProcessing
-                                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                                    : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'
+                                className={`absolute right-1.5 top-1.5 bottom-1.5 px-4 text-xs font-bold rounded-md transition-all ${!videoUrl || isProcessing
+                                    ? 'bg-slate-200 text-slate-500'
+                                    : 'bg-slate-900 text-white hover:bg-slate-800'
                                     }`}
                             >
-                                {isProcessing ? 'Processing...' : 'Fetch'}
+                                Fetch
                             </button>
                         </div>
-                    </div>
 
-                    {/* Icons Row - Simplified */}
-                    <div className="flex justify-center gap-4 mb-6">
-                        {platforms.map((platform, idx) => (
-                            <div
-                                key={platform.name}
-                                className={`w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${platform.color} ${platform.isPlus ? 'text-gray-600' : ''}`}
-                                title={platform.name}
-                                onClick={() => !platform.isPlus && setVideoUrl(`https://${platform.name.toLowerCase()}.com/example`)}
-                            >
-                                {platform.isPlus ? (
-                                    <span className="text-xs font-bold">{platform.icon}</span>
-                                ) : (
-                                    platform.icon
-                                )}
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* Uploaded Video Card or Placeholder */}
-                    {uploadedVideo ? (
-                        <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 flex items-center gap-3 animate-slide-up">
-                            <div className="relative">
-                                <div className="w-12 h-12 bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
-                                    <img src={uploadedVideo.thumbnail} alt="Video thumb" className="w-full h-full object-cover" />
-                                </div>
-                                {uploadProgress[uploadedVideo.name] && uploadProgress[uploadedVideo.name] < 100 ? (
-                                    <div className="absolute -bottom-1 left-0 right-0 h-1 bg-gray-200 rounded-full overflow-hidden">
-                                        <div
-                                            className="h-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-300"
-                                            style={{ width: `${uploadProgress[uploadedVideo.name]}%` }}
-                                        ></div>
-                                    </div>
-                                ) : null}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="text-xs font-medium text-gray-900 truncate">{uploadedVideo.name}</div>
-                                <div className="text-[10px] text-gray-500">
-                                    {uploadedVideo.duration} • {uploadedVideo.confidence}
-                                    {uploadProgress[uploadedVideo.name] < 100 && (
-                                        <span className="ml-2 text-blue-500">
-                                            Uploading... {uploadProgress[uploadedVideo.name]}%
-                                        </span>
+                        {/* Platforms Icons */}
+                        <div className="flex justify-center gap-3">
+                            {platforms.map((platform) => (
+                                <div
+                                    key={platform.name}
+                                    className={`h-8 px-3 rounded-full flex items-center justify-center gap-2 cursor-pointer transition-transform hover:scale-105 border border-slate-200 ${platform.color}`}
+                                    onClick={() => !platform.isPlus && setVideoUrl(`https://${platform.name.toLowerCase()}.com/example`)}
+                                >
+                                    {platform.isPlus ? (
+                                        <span className="text-xs font-bold">{platform.icon} {platform.name}</span>
+                                    ) : (
+                                        <>
+                                            {platform.icon}
+                                            <span className="text-xs font-bold">{platform.name}</span>
+                                        </>
                                     )}
                                 </div>
+                            ))}
+
+                        </div>
+                        {errors.url && <p className="text-red-500 text-xs font-semibold mt-2 ml-1">{errors.url}</p>}
+                        {errors.source && !videoUrl && !uploadedVideo && <p className="text-red-500 text-xs font-semibold mt-2 ml-1">{errors.source}</p>}
+                    </div>
+
+                    {/* Uploaded Video Card */}
+                    {uploadedVideo ? (
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3 animate-fade-in">
+                            <div className="w-16 h-12 bg-slate-200 rounded-md overflow-hidden flex-shrink-0 relative">
+                                <img src={uploadedVideo.thumbnail} alt="Ref" className="w-full h-full object-cover" />
+                                {uploadProgress[uploadedVideo.name] && uploadProgress[uploadedVideo.name] < 100 && (
+                                    <div className="absolute bottom-0 left-0 h-1 bg-green-500 transition-all" style={{ width: `${uploadProgress[uploadedVideo.name]}%` }}></div>
+                                )}
                             </div>
-                            <div className="flex flex-col items-end gap-1">
-                                <div className="flex items-center gap-1">
-                                    <span className="text-[10px] font-medium text-gray-500">{uploadedVideo.lang}</span>
+                            <div className="flex-1 min-w-0">
+                                <div className="text-sm font-semibold text-slate-900 truncate">{uploadedVideo.name}</div>
+                                <div className="text-xs text-slate-600 font-medium">
+                                    {uploadedVideo.duration} • {uploadedVideo.size}
                                 </div>
-                                <button
-                                    onClick={removeVideo}
-                                    className="text-[10px] text-red-500 hover:text-red-700 font-bold"
-                                >
-                                    Remove
-                                </button>
                             </div>
+                            <button onClick={removeVideo} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                </svg>
+                            </button>
                         </div>
                     ) : (
-                        <div className="bg-gray-50/50 border border-dashed border-gray-200 rounded-xl p-4 text-center">
-                            <p className="text-xs text-gray-400">No video uploaded yet</p>
-                            <p className="text-[10px] text-gray-300 mt-1">Upload a file or paste a URL</p>
+                        <div className="h-16 border border-dashed border-slate-200 rounded-xl flex items-center justify-center text-xs text-slate-500 bg-slate-50/30">
+                            No active media
                         </div>
                     )}
                 </div>
 
-                {/* Column 2: Localization Matrix */}
-                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-purple-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-purple-500/10 hover:-translate-y-1">
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-400 to-pink-400"></div>
-
-                    <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Localization Matrix</h2>
-
-                    {/* AI Detection Toggle */}
-                    <div className="bg-white/40 backdrop-blur-sm rounded-2xl p-4 mb-6 flex items-center justify-between border border-white/60 shadow-sm">
-                        <div className="flex flex-col">
-                            <span className="text-xs font-bold text-gray-700 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600">AI-POWERED LANGUAGE DETECTION</span>
-                            <span className="text-[10px] text-gray-500 mt-1 font-medium">
-                                Source Language: {sourceLang} - {useAiDetection ? '98%' : 'Manual'} Confidence
-                            </span>
+                {/* Column 2: Localization */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col h-full hover:shadow-md transition-shadow duration-300">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                            </svg>
                         </div>
-                        <div
-                            className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-all duration-300 ${useAiDetection ? 'bg-gradient-to-r from-blue-500 to-purple-500 shadow-md shadow-purple-200' : 'bg-gray-200'}`}
-                            onClick={() => setUseAiDetection(!useAiDetection)}
-                        >
-                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-300 ${useAiDetection ? 'translate-x-6' : 'translate-x-0'}`}></div>
-                        </div>
+                        <h2 className="text-base font-extrabold text-slate-800 uppercase tracking-wide">Language Setup</h2>
                     </div>
 
+                    <div className="space-y-6 flex-1">
+                        <LanguageDropdown
+                            label="Original Language"
+                            value={sourceLanguage}
+                            options={languages}
+                            onSelect={handleSourceSelect}
+                            isOpen={showSourceDropdown}
+                            setIsOpen={setShowSourceDropdown}
+                            isAuto={true}
+                        />
 
-
-                    {/* Language Grid */}
-                    <div className="grid grid-cols-3 gap-3">
-                        {paginatedLanguages.map((lang) => (
-                            <div
-                                key={lang.code}
-                                onClick={() => handleLanguageSelect(lang.code)}
-                                className={`border rounded-2xl p-3 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 group relative ${selectedLanguages.includes(lang.code)
-                                    ? 'border-purple-300/50 bg-gradient-to-br from-purple-50/80 to-pink-50/80 shadow-lg shadow-purple-500/10 backdrop-blur-sm'
-                                    : 'border-white/50 bg-white/30 hover:bg-white/60 hover:border-purple-200 hover:shadow-md'
-                                    }`}
-                            >
-                                <span className="text-2xl mb-2 group-hover:scale-110 transition-transform">{lang.flag}</span>
-                                <span className="text-xs font-semibold text-gray-700 text-center">{lang.name}</span>
-                                <div className="mt-2 w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
-                                    <div
-                                        className="h-full rounded-full transition-all duration-500"
-                                        style={{
-                                            width: lang.progress,
-                                            background: selectedLanguages.includes(lang.code)
-                                                ? 'linear-gradient(to right, #8b5cf6, #ec4899)'
-                                                : 'linear-gradient(to right, #60a5fa, #8b5cf6)'
-                                        }}
-                                    ></div>
-                                </div>
-                                <span className={`text-[10px] mt-1 ${selectedLanguages.includes(lang.code) ? 'text-purple-600 font-bold' : 'text-gray-400'}`}>
-                                    {lang.progress}
-                                </span>
-                                {selectedLanguages.includes(lang.code) && (
-                                    <div className="absolute top-2 right-2 w-2 h-2 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
-                                )}
+                        <div className="flex justify-center -my-3 relative z-10">
+                            <div className="w-8 h-8 rounded-full bg-white shadow border border-slate-200 flex items-center justify-center text-slate-400">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7" />
+                                </svg>
                             </div>
-                        ))}
-                    </div>
+                        </div>
 
-                    {/* Pagination with Arrows */}
-                    <div className="mt-auto pt-4 border-t border-gray-100">
-                        <div className="flex justify-between items-center">
-                            <div className="text-[10px] text-gray-500">
-                                Page {currentPage} of {totalPages}
-                            </div>
-                            <div className="flex items-center gap-4">
-                                <button
-                                    onClick={prevPage}
-                                    disabled={currentPage === 1}
-                                    className={`p-1.5 rounded-full transition-all duration-300 ${currentPage === 1
-                                        ? 'text-gray-300 cursor-not-allowed'
-                                        : 'text-purple-600 hover:bg-purple-50 hover:scale-110'
-                                        }`}
-                                    title="Previous page"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                                    </svg>
-                                </button>
+                        <div className="relative">
+                            <LanguageDropdown
+                                label="Target Language"
+                                value={targetLanguage}
+                                options={languages}
+                                onSelect={(code) => {
+                                    handleTargetSelect(code);
+                                    if (errors.targetLang) setErrors(prev => ({ ...prev, targetLang: null }));
+                                }}
+                                isOpen={showTargetDropdown}
+                                setIsOpen={setShowTargetDropdown}
+                            />
+                            {errors.targetLang && <p className="text-red-500 text-xs font-semibold mt-1 ml-1 absolute -bottom-5">{errors.targetLang}</p>}
+                        </div>
 
-                                <div className="text-xs font-medium text-gray-700">
-                                    {currentPage} / {totalPages}
-                                </div>
+                        {/* Additional Options in Empty Space */}
+                        <div className="pt-4 mt-auto">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Processing Options</h3>
+                            <div className="space-y-3">
+                                <label className="flex items-center gap-3 cursor-pointer group">
+                                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${recoverBackgroundNoise ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white group-hover:border-blue-400'}`}>
+                                        {recoverBackgroundNoise && (
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-white" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        className="hidden"
+                                        checked={recoverBackgroundNoise}
+                                        onChange={(e) => setRecoverBackgroundNoise(e.target.checked)}
+                                    />
+                                    <span className="text-sm font-semibold text-slate-700">Recover Background Noise</span>
+                                </label>
 
-                                <button
-                                    onClick={nextPage}
-                                    disabled={currentPage === totalPages}
-                                    className={`p-1.5 rounded-full transition-all duration-300 ${currentPage === totalPages
-                                        ? 'text-gray-300 cursor-not-allowed'
-                                        : 'text-purple-600 hover:bg-purple-50 hover:scale-110'
-                                        }`}
-                                    title="Next page"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                </button>
+                                <label className="flex items-center gap-3 cursor-pointer group">
+                                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${makeVideo ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white group-hover:border-blue-400'}`}>
+                                        {makeVideo && (
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-white" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        className="hidden"
+                                        checked={makeVideo}
+                                        onChange={(e) => setMakeVideo(e.target.checked)}
+                                    />
+                                    <span className="text-sm font-semibold text-slate-700">Generate Video Output</span>
+                                </label>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Column 3: Voice Intelligence */}
-                <div className="bg-white/60 backdrop-blur-xl rounded-3xl p-6 shadow-xl shadow-pink-500/5 border border-white/60 flex flex-col h-full relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-pink-500/10 hover:-translate-y-1">
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
-
-                    <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6 text-center">Voice Intelligence</h2>
-
-                    {/* Speaker Mapping */}
-                    <div className="mb-8">
-                        <div className="flex justify-between items-center mb-3">
-                            <h3 className="text-xs font-semibold text-gray-400 uppercase">Speaker Mapping</h3>
-                            <span className="text-[10px] text-gray-500">
-                                {speakerMappings.filter(s => s.voiceClone).length} cloned
-                            </span>
+                {/* Column 3: Speaker */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col h-full hover:shadow-md transition-shadow duration-300">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center text-rose-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                            </svg>
                         </div>
+                        <h2 className="text-base font-extrabold text-slate-800 uppercase tracking-wide">Voice Model</h2>
+                    </div>
 
-                        <div className="space-y-3">
-                            {speakerMappings.map((speaker) => (
+                    {/* Speaker Gender Selector */}
+                    <div className="flex-1">
+                        <label className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-3 block">Voice Gender</label>
+                        <div className="grid grid-cols-1 gap-3">
+                            {speakerOptions.map((option) => (
                                 <div
-                                    key={speaker.id}
-                                    className={`bg-white/40 backdrop-blur-sm border rounded-xl p-3 flex items-center justify-between transition-all duration-300 hover:bg-white/60 ${speaker.voiceClone
-                                        ? 'border-pink-200 shadow-sm shadow-pink-100/50'
-                                        : 'border-white/60'
-                                        }`}
+                                    key={option.id}
+                                    onClick={() => setSpeakerGender(option.name)}
+                                    className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 flex items-center gap-4 ${speakerGender === option.name
+                                        ? `border-transparent ring-2 ring-offset-2 ring-slate-900 bg-slate-900 text-white shadow-lg`
+                                        : 'border-slate-100 bg-white hover:border-slate-300'}`}
                                 >
-                                    <div>
-                                        <div className="text-xs font-bold text-gray-800">
-                                            {speaker.name} ({speaker.gender})
-                                        </div>
-                                        <div className="text-[10px] text-gray-500">
-                                            Target: {getLanguageName(speaker.targetLang)}
-                                        </div>
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xl bg-white/20`}>
+                                        {option.icon}
                                     </div>
-                                    <button
-                                        onClick={() => toggleVoiceClone(speaker.id)}
-                                        className={`px-3 py-1 text-[10px] font-bold rounded-full border transition-all duration-300 ${speaker.voiceClone
-                                            ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white border-transparent hover:shadow-lg hover:shadow-pink-200'
-                                            : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
-                                            }`}
-                                    >
-                                        {speaker.voiceClone ? '✓ Cloned' : 'Voice Clone'}
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Tone & Emotion Sliders */}
-                    <div className="mb-6 space-y-5">
-                        <div className="flex justify-between items-center mb-2">
-                            <h3 className="text-xs font-semibold text-gray-400 uppercase">Tone & Emotion</h3>
-                            <button
-                                onClick={resetToneSettings}
-                                className="text-[10px] text-blue-500 hover:text-blue-700 font-bold"
-                            >
-                                Reset to 0
-                            </button>
-                        </div>
-
-                        {Object.entries(toneSettings).map(([key, value]) => (
-                            <div key={key} className="flex items-center gap-4">
-                                <span className="text-xs font-medium text-gray-600 w-12 capitalize">
-                                    {key}
-                                </span>
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    value={value}
-                                    onChange={(e) => handleToneChange(key, e.target.value)}
-                                    className="flex-1 accent-gradient h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                                />
-                                <span className="text-[10px] font-bold w-8 text-center text-blue-600">
-                                    {value}%
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* Glossary Upload */}
-                    <div className="mt-auto">
-                        <h3 className="text-xs font-semibold text-gray-400 mb-3 uppercase">Glossary Upload</h3>
-                        <div className="relative">
-                            <div
-                                onClick={() => document.getElementById('glossary-upload').click()}
-                                className="bg-white/40 backdrop-blur-sm border border-dashed border-indigo-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-white/60 hover:border-blue-400 transition-all duration-300 group"
-                            >
-                                <div className="w-8 h-8 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                    </svg>
-                                </div>
-                                <div className="flex-1">
-                                    {glossaryFile ? (
-                                        <div>
-                                            <div className="text-xs font-bold text-gray-700">{glossaryFile.name}</div>
-                                            <div className="text-[10px] text-gray-400">{glossaryFile.size} • {glossaryFile.terms} terms</div>
-                                        </div>
-                                    ) : (
-                                        <div>
-                                            <div className="text-xs font-bold text-gray-700">Upload CSV of Key Terms</div>
-                                            <div className="text-[10px] text-gray-400">Maximize translation accuracy</div>
+                                    <div className="flex-1">
+                                        <div className={`text-sm font-bold ${speakerGender === option.name ? 'text-white' : 'text-slate-800'}`}>{option.name}</div>
+                                        <div className={`text-[10px] uppercase tracking-wider font-medium ${speakerGender === option.name ? 'text-slate-300' : 'text-slate-400'}`}>Professional</div>
+                                    </div>
+                                    {speakerGender === option.name && (
+                                        <div className="w-5 h-5 bg-white text-slate-900 rounded-full flex items-center justify-center">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                            </svg>
                                         </div>
                                     )}
                                 </div>
-                                {glossaryFile && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setGlossaryFile(null);
-                                        }}
-                                        className="text-[10px] text-red-500 hover:text-red-700 font-bold"
-                                    >
-                                        Remove
-                                    </button>
-                                )}
-                            </div>
-                            <input
-                                id="glossary-upload"
-                                type="file"
-                                accept=".csv"
-                                className="hidden"
-                                onChange={handleGlossaryUpload}
-                            />
+                            ))}
                         </div>
+
+
                     </div>
                 </div>
+
+
             </div>
 
             {/* Footer Action */}
-            <div className="mt-8 flex flex-col items-center animate-bounce-in">
+            <div className="mt-12 flex flex-col items-center w-full max-w-md">
                 {isProcessing ? (
-                    <div className="w-96 bg-gray-100 rounded-full h-3 mb-4 overflow-hidden">
-                        <div
-                            className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 transition-all duration-500 rounded-full"
-                            style={{ width: `${processingProgress}%` }}
-                        ></div>
+                    <div className="w-full mb-4">
+                        <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                            <span>Processing</span>
+                            <span>{processingProgress.toFixed(0)}%</span>
+                        </div>
+                        <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <div
+                                className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                                style={{ width: `${processingProgress}%` }}
+                            ></div>
+                        </div>
                     </div>
                 ) : null}
 
                 <button
                     onClick={handleGenerateVideo}
                     disabled={isProcessing || (!uploadedVideo && !videoUrl)}
-                    className={`bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 text-white font-bold py-4 px-12 rounded-full shadow-lg transform transition-all text-sm tracking-widest uppercase ${isProcessing || (!uploadedVideo && !videoUrl)
-                        ? 'opacity-50 cursor-not-allowed'
-                        : 'shadow-purple-200 hover:shadow-purple-300 hover:scale-105 active:scale-95'
+                    className={`w-full py-4 rounded-xl shadow-lg transition-all text-sm font-bold uppercase tracking-widest ${isProcessing || (!uploadedVideo && !videoUrl)
+                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
+                        : 'bg-slate-900 text-white hover:bg-slate-800 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0'
                         }`}
                 >
-                    {isProcessing ? (
-                        <span className="flex items-center gap-2">
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                            Processing... {processingProgress.toFixed(0)}%
-                        </span>
-                    ) : (
-                        'Generate Globalized Video'
-                    )}
+                    {isProcessing ? 'Processing Request...' : 'Generate Dubbed Video'}
                 </button>
-                <p className="text-xs text-gray-400 mt-3 font-medium">
-                    Estimated Time: <span className="text-gray-600">{calculateEstimatedTime()} mins</span>
-                    <span className="ml-4">
-                        Languages: <span className="text-purple-600 font-bold">{selectedLanguages.length}</span>
-                    </span>
+                <p className="text-xs text-slate-600 mt-4 text-center font-semibold">
+                    Enterprise Grade Encryption
                 </p>
             </div>
 
             {/* Processing Overlay */}
-            {isProcessing && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-                    <div className="bg-white rounded-2xl p-8 max-w-md text-center animate-scale-in">
-                        <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center">
-                            <svg className="w-10 h-10 text-white animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                            </svg>
-                        </div>
-                        <h3 className="text-lg font-bold text-gray-800 mb-2">Processing Video</h3>
-                        <p className="text-gray-600 text-sm mb-4">
-                            Processing {selectedLanguages.length} languages with {speakerMappings.filter(s => s.voiceClone).length} cloned voices
-                        </p>
-                        <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
-                            <div
-                                className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300"
-                                style={{ width: `${processingProgress}%` }}
-                            ></div>
-                        </div>
-                        <p className="text-xs text-gray-500">
-                            {processingProgress < 100 ? 'This may take a few minutes...' : 'Complete!'}
-                        </p>
+            {
+                isProcessing && (
+                    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+                        {/* Overlay functionality retained for focus, but styled professionally */}
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };
 

@@ -1,20 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 // import axios from 'axios'; // Keeping axios import as requested, even if unused for now
 
-const PreviewPage = ({
-    initialMetadata = {
+const PreviewPage = () => {
+    const location = useLocation();
+    const state = location.state || {}; // Fallback to empty object if no state
+
+    const initialMetadata = state.metadata || {
         originalLanguage: 'Spanish',
         dubbedLanguage: 'English',
         duration: '3:45',
         resolution: '1080p',
         status: 'Synced Successfully',
-    },
-    videoUrls = {
-        original: 'https://www.w3schools.com/html/mov_bbb.mp4',
-        dubbed: 'https://www.w3schools.com/html/movie.mp4'
-    }
-}) => {
+    };
+
+    const videoUrls = {
+        original: state.originalVideoUrl || 'https://www.w3schools.com/html/mov_bbb.mp4',
+        dubbed: state.videoUrl || 'https://www.w3schools.com/html/movie.mp4'
+    };
     // State Management
     const [isDubbed, setIsDubbed] = useState(true);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -57,9 +60,40 @@ const PreviewPage = ({
     };
 
     // User Action Handlers
-    const handleDownload = () => {
-        showToastMessage('Download started! 📥');
-        console.log('Downloading video...');
+    const handleDownload = async () => {
+        if (!videoUrls.dubbed) {
+            showToastMessage('No video available for download.', 'error');
+            return;
+        }
+
+        try {
+            showToastMessage('Download started! 📥');
+
+            const response = await fetch(videoUrls.dubbed);
+            if (!response.ok) throw new Error('Download failed');
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `dubbed_video_${Date.now()}.mp4`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+        } catch (error) {
+            console.error('Download error:', error);
+            // Fallback to direct link if fetch fails (e.g. CORS on placeholder)
+            const link = document.createElement('a');
+            link.href = videoUrls.dubbed;
+            link.download = `dubbed_video_${Date.now()}.mp4`;
+            link.target = '_blank';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
     };
 
     const navigate = useNavigate();
