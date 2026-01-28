@@ -75,30 +75,15 @@ class MediaEngine:
         - -c:v copy: Zero video re-encoding (latency win)
         - +faststart: Web-optimized (moves moov atom for quick start)
         - Single pass remuxing
-        - Stream detection: Handles audio-only files gracefully
         """
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video path not found: {video_path}")
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
-        # Probe the input video to detect available streams
-        logger.info(f"Probing input file: {video_path}")
-        try:
-            probe_info = cls.get_probe_info(video_path)
-            streams = probe_info.get('streams', [])
-            
-            has_video = any(s.get('codec_type') == 'video' for s in streams)
-            has_audio = any(s.get('codec_type') == 'audio' for s in streams)
-            
-            logger.info(f"Stream detection - Video: {has_video}, Audio: {has_audio}")
-            
-        except Exception as e:
-            logger.warning(f"Stream probe failed: {e}. Attempting merge anyway...")
-            has_video = True  # Assume video exists if probe fails
-            has_audio = False
+        # Check for hardware acceleration availability (optional)
+        # Note: Even without hwaccel, 'copy' is extremely fast as it's just I/O.
         
-        # Build FFmpeg command based on available streams
         command = [
             cls.FFMPEG_PATH,
             "-y",
@@ -106,29 +91,15 @@ class MediaEngine:
             "-loglevel", "error",
             "-i", video_path,
             "-i", audio_path,
+            "-map", "0:v",       # Copy all video streams
+            "-map", "1:a:0",     # Take first audio stream from input 1
+            "-map_metadata", "0", # Preserve original metadata
+            "-c:v", "copy",      # Zero video re-encoding
+            "-c:a", "aac",       # Encode audio to AAC
+            "-b:a", "192k",      # High quality audio bitrate
+            "-movflags", "+faststart", # Optimize for web streaming
+            os.path.abspath(output_path)
         ]
-        
-        if has_video:
-            # Video stream exists - use stream copy
-            command.extend([
-                "-map", "0:v",       # Copy all video streams
-                "-map", "1:a:0",     # Take first audio stream from input 1
-                "-map_metadata", "0", # Preserve original metadata
-                "-c:v", "copy",      # Zero video re-encoding
-                "-c:a", "aac",       # Encode audio to AAC
-                "-b:a", "192k",      # High quality audio bitrate
-                "-movflags", "+faststart", # Optimize for web streaming
-            ])
-        else:
-            # Audio-only file - just replace audio
-            logger.warning(f"No video stream detected in {video_path}. Creating audio-only output.")
-            command.extend([
-                "-map", "1:a:0",     # Take audio from input 1
-                "-c:a", "aac",       # Encode audio to AAC
-                "-b:a", "192k",      # High quality audio bitrate
-            ])
-        
-        command.append(os.path.abspath(output_path))
 
         logger.info(f"Starting stream-copy merge: {' '.join(command)}")
         
@@ -136,35 +107,7 @@ class MediaEngine:
         
         if result.returncode != 0:
             logger.error(f"FFmpeg merge failed: {result.stderr}")
-            
-            # Retry with more lenient mapping (add '?' to make streams optional)
-            if "matches no streams" in result.stderr and has_video:
-                logger.warning("Retrying with optional stream mapping...")
-                command_retry = [
-                    cls.FFMPEG_PATH,
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel", "error",
-                    "-i", video_path,
-                    "-i", audio_path,
-                    "-map", "0:v?",      # Optional video stream
-                    "-map", "1:a:0",     # Required audio stream
-                    "-map_metadata", "0",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-movflags", "+faststart",
-                    os.path.abspath(output_path)
-                ]
-                
-                logger.info(f"Retry command: {' '.join(command_retry)}")
-                result = subprocess.run(command_retry, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    logger.error(f"Retry also failed: {result.stderr}")
-                    raise RuntimeError(f"FFmpeg merge failed after retry: {result.stderr}")
-            else:
-                raise RuntimeError(f"FFmpeg merge failed: {result.stderr}")
+            raise RuntimeError(f"FFmpeg merge failed: {result.stderr}")
         
         logger.info(f"Merge successful: {output_path}")
         return output_path
@@ -246,19 +189,7 @@ class MediaEngine:
         """
         One-pass merge with Audio Ducking.
         Lowers background music when speech is present using the 'sidechain' filter approach.
-        Handles audio-only files gracefully.
         """
-        # Probe the input video to detect available streams
-        logger.info(f"Probing input file for complex merge: {video_path}")
-        try:
-            probe_info = cls.get_probe_info(video_path)
-            streams = probe_info.get('streams', [])
-            has_video = any(s.get('codec_type') == 'video' for s in streams)
-            logger.info(f"Stream detection - Video: {has_video}")
-        except Exception as e:
-            logger.warning(f"Stream probe failed: {e}. Assuming video exists...")
-            has_video = True
-        
         command = [
             cls.FFMPEG_PATH,
             "-y", "-hide_banner", "-loglevel", "error",
@@ -274,63 +205,20 @@ class MediaEngine:
             "[1:a]asplit[v_mix][v_side];" +
             "[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2:release=500:attack=10[bg_ducked];" +
             "[v_mix][bg_ducked]amix=inputs=2:duration=longest[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-map_metadata", "0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            os.path.abspath(output_path)
         ]
-        
-        if has_video:
-            command.extend([
-                "-map", "0:v",
-                "-map", "[aout]",
-                "-map_metadata", "0",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-movflags", "+faststart",
-            ])
-        else:
-            # Audio-only output
-            logger.warning(f"No video stream in {video_path}. Creating audio-only output.")
-            command.extend([
-                "-map", "[aout]",
-                "-c:a", "aac",
-                "-b:a", "192k",
-            ])
-        
-        command.append(os.path.abspath(output_path))
         
         logger.info(f"Starting complex merge with ducking...")
         result = subprocess.run(command, capture_output=True, text=True)
-        
         if result.returncode != 0:
-            # Retry with optional video mapping if stream not found
-            if "matches no streams" in result.stderr and has_video:
-                logger.warning("Retrying complex merge with optional video mapping...")
-                command_retry = [
-                    cls.FFMPEG_PATH,
-                    "-y", "-hide_banner", "-loglevel", "error",
-                    "-i", video_path,
-                    "-i", tts_audio_path,
-                    "-i", background_audio_path,
-                    "-filter_complex",
-                    f"[2:a]volume={bg_volume}[bg_vol];" +
-                    "[1:a]asplit[v_mix][v_side];" +
-                    "[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2:release=500:attack=10[bg_ducked];" +
-                    "[v_mix][bg_ducked]amix=inputs=2:duration=longest[aout]",
-                    "-map", "0:v?",  # Optional video
-                    "-map", "[aout]",
-                    "-map_metadata", "0",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-movflags", "+faststart",
-                    os.path.abspath(output_path)
-                ]
-                
-                result = subprocess.run(command_retry, capture_output=True, text=True)
-                if result.returncode != 0:
-                    raise RuntimeError(f"Complex merge with ducking failed after retry: {result.stderr}")
-            else:
-                raise RuntimeError(f"Complex merge with ducking failed: {result.stderr}")
-        
+            raise RuntimeError(f"Complex merge with ducking failed: {result.stderr}")
         return output_path
 
     @staticmethod
