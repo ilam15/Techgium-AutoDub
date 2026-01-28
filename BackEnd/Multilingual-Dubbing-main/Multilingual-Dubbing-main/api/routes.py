@@ -6,6 +6,7 @@ import shutil
 from core.config import settings
 from core.logger import logger
 from main_pipeline import ProductionPipeline
+from clean_up import cleanup_all_temporary_files
 
 router = APIRouter()
 
@@ -50,7 +51,12 @@ async def dub_video(
         if result.get("status") == "error":
             return result
 
-        # 4. Success payload
+        # 4. Schedule background cleanup (runs after response is sent)
+        # This keeps only the latest output video and removes all temporary files
+        background_tasks.add_task(cleanup_all_temporary_files, keep_latest_output=True)
+        logger.info(f"Scheduled background cleanup for request: {trace_id}")
+
+        # 5. Success payload
         base_url = f"{request.url.scheme}://{request.url.netloc}"
         return {
             "status": "success",
