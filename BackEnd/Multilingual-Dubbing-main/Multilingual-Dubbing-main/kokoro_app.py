@@ -70,24 +70,27 @@ def update_pipeline(Language):
     new_lang = language_map.get(Language, "a")
 
     # Only update if the language is different
-    if new_lang != last_used_language:
+    if new_lang != last_used_language or kokoro_pipeline is None:
         try:
             if kokoro_pipeline is not None:
                del kokoro_pipeline
                gc.collect()
                torch.cuda.empty_cache()
+            
+            from core.logger import logger
+            logger.info(f"Initializing Kokoro KPipeline for: {Language}")
             kokoro_pipeline = KPipeline(lang_code=new_lang)
-            last_used_language = new_lang  # Update last used language
-            # print(f"Pipeline updated to {Language} ({new_lang})")
+            last_used_language = new_lang
+            if temp_folder_kokoro is None:
+                create_audio_dir()
         except Exception as e:
-            print(f"Error initializing KPipeline: {e}")
+            # print(f"Error initializing KPipeline: {e}")
             if KOKORO_AVAILABLE:
-                print("Retrying with default language...")
                 try:
                     kokoro_pipeline = KPipeline(lang_code="a")  # Fallback to English
                     last_used_language = "a"
                 except:
-                    print("Failed to initialize fallback pipeline")
+                    pass
 
 
 
@@ -634,21 +637,21 @@ def bulk_tts(script_data,language_name="American English",voice_name="af_heart",
   return audio_list,noraml_srt_list,word_srt_list,json_list
 kokoro_pipeline=None
 temp_folder_kokoro=None
-def boot_kokoro():
-  global kokoro_pipeline,temp_folder_kokoro,last_used_language
-  if not KOKORO_AVAILABLE:
-    print("Kokoro TTS is not available, skipping initialization")
-    return None
-  try:
-     if kokoro_pipeline is not None:
-        del kokoro_pipeline
-        gc.collect()
-        torch.cuda.empty_cache()
-  except:
-    pass
-  kokoro_pipeline = KPipeline(lang_code=last_used_language)
-  temp_folder_kokoro = create_audio_dir()
-  return kokoro_pipeline
+# def boot_kokoro(): (Removed for lazy loading)
+
+def get_kokoro_pipeline(lang_code="a"):
+    """Thread-safe lazy initializer for Kokoro pipeline"""
+    global kokoro_pipeline, temp_folder_kokoro
+    if not KOKORO_AVAILABLE:
+        return None
+    if kokoro_pipeline is None:
+        try:
+            kokoro_pipeline = KPipeline(lang_code=lang_code)
+            temp_folder_kokoro = create_audio_dir()
+        except Exception as e:
+            # print(f"Failed to initialize Kokoro: {e}")
+            return None
+    return kokoro_pipeline
 
 def clean_folder_data(folder_path):
     try:
@@ -678,4 +681,4 @@ temp_subtile_dir = f"{base_path}/temp/temp_subtile" # Define Subtile directory
 os.makedirs(temp_audio_dir, exist_ok=True)  # Create if not exists
 os.makedirs(temp_subtile_dir, exist_ok=True)  # Create if not exists
 
-kokoro_pipeline=boot_kokoro()
+# kokoro_pipeline=boot_kokoro() (Removed)
