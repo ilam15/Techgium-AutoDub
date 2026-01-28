@@ -24,6 +24,14 @@ const InputPage = () => {
     // Validation Errors
     const [errors, setErrors] = useState({});
 
+    // YouTube Downloader State
+    const [videoInfo, setVideoInfo] = useState(null);
+    const [availableFormats, setAvailableFormats] = useState([]);
+    const [selectedFormat, setSelectedFormat] = useState(null);
+    const [downloadedFilePath, setDownloadedFilePath] = useState(null);
+    const [isDownloading, setIsDownloading] = useState(false);
+    const [showQualityOptions, setShowQualityOptions] = useState(false);
+
     const fileInputRef = useRef(null);
     const dropZoneRef = useRef(null);
     const navigate = useNavigate();
@@ -204,52 +212,113 @@ const InputPage = () => {
     }, []);
 
 
-    // URL processing
-    const processUrl = () => {
+    // URL processing - Fetch video info from YouTube
+    const processUrl = async () => {
         if (!videoUrl) return;
 
         // Validate URL
-        const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|vimeo\.com|bilibili\.com)\/.+/i;
+        const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|bilibili\.com)\/.+/i;
         if (!urlPattern.test(videoUrl)) {
             setErrors(prev => ({ ...prev, url: 'Please enter a valid YouTube, Vimeo, or Bilibili URL' }));
             return;
         }
         setErrors(prev => ({ ...prev, url: null }));
 
-        // Simulate video analysis
         setIsProcessing(true);
         setProcessingProgress(0);
 
-        const progressInterval = setInterval(() => {
-            setProcessingProgress(prev => {
-                if (prev >= 100) {
-                    clearInterval(progressInterval);
-                    setIsProcessing(false);
-
-                    // Set mock video data
-                    setUploadedVideo({
-                        name: 'Video from URL',
-                        size: '15.3 MB',
-                        type: 'video/mp4',
-                        thumbnail: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?auto=format&fit=crop&w=100&q=80',
-                        duration: '5 mins',
-                        confidence: '98.2%',
-                        lang: 'EN-US',
-                        source: 'url'
-                    });
-
-                    return 100;
-                }
-                return prev + 10;
+        try {
+            const response = await fetch('http://localhost:8000/fetch_video_info', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: videoUrl }),
             });
-        }, 200);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to fetch video info');
+            }
+
+            const data = await response.json();
+            setVideoInfo(data);
+            setAvailableFormats(data.formats || []);
+            setShowQualityOptions(true);
+            setIsProcessing(false);
+
+            // Show video preview
+            const durationMins = Math.round(data.duration / 60);
+            setUploadedVideo({
+                name: data.title,
+                size: 'Pending download',
+                type: 'video/mp4',
+                thumbnail: data.thumbnail,
+                duration: `${durationMins} mins`,
+                source: 'url'
+            });
+
+        } catch (error) {
+            console.error(error);
+            setIsProcessing(false);
+            setErrors(prev => ({ ...prev, url: error.message }));
+        }
+    };
+
+    // Download video in selected quality
+    const downloadVideo = async (formatId = null) => {
+        if (!videoUrl) return;
+
+        setIsDownloading(true);
+        setProcessingProgress(0);
+
+        try {
+            const response = await fetch('http://localhost:8000/download_video', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    url: videoUrl,
+                    format_id: formatId
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to download video');
+            }
+
+            const data = await response.json();
+            setDownloadedFilePath(data.file_path);
+            setIsDownloading(false);
+            setShowQualityOptions(false);
+
+            // Update video info with actual file size
+            const fileSizeMB = (data.file_size / (1024 * 1024)).toFixed(2);
+            setUploadedVideo(prev => ({
+                ...prev,
+                size: `${fileSizeMB} MB`,
+                name: data.file_name
+            }));
+
+            alert('Video downloaded successfully! You can now proceed with dubbing.');
+
+        } catch (error) {
+            console.error(error);
+            setIsDownloading(false);
+            alert(`Download failed: ${error.message}`);
+        }
     };
 
     // Generate video handler
     const handleGenerateVideo = async () => {
         let newErrors = {};
 
-        if (!uploadedVideo && !videoUrl) {
+        // Check if we have a video from URL that needs to be downloaded first
+        if (uploadedVideo && uploadedVideo.source === 'url' && !downloadedFilePath) {
+            newErrors.source = 'Please download the video first by selecting a quality option';
+        } else if (!uploadedVideo && !videoUrl) {
             newErrors.source = 'Please upload a video file or enter a valid URL above';
         }
 
@@ -270,10 +339,13 @@ const InputPage = () => {
 
         try {
             const formData = new FormData();
+
+            // Add file or file_path depending on source
             if (rawFile) {
                 formData.append('file', rawFile);
+            } else if (downloadedFilePath) {
+                formData.append('file_path', downloadedFilePath);
             }
-            // else if (videoUrl) { ... handle URL case ... } // Priority on file upload as per user mock
 
             // Helper to get full language name if needed, or code. 
             // The backend likely expects full English names based on app.py
@@ -723,7 +795,106 @@ const InputPage = () => {
                     </div>
                 )
             }
+
+            {/* Quality Selection Modal */}
+            {showQualityOptions && videoInfo && (
+                <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+                        {/* Header */}
+                        <div className="sticky top-0 bg-white border-b border-slate-200 p-6 rounded-t-2xl">
+                            <div className="flex items-start justify-between gap-4">
+                                <div className="flex gap-4 flex-1">
+                                    <img
+                                        src={videoInfo.thumbnail}
+                                        alt="Video thumbnail"
+                                        className="w-32 h-20 object-cover rounded-lg"
+                                    />
+                                    <div className="flex-1">
+                                        <h3 className="text-lg font-bold text-slate-900 mb-1">{videoInfo.title}</h3>
+                                        <p className="text-sm text-slate-600">
+                                            {videoInfo.uploader} • {Math.round(videoInfo.duration / 60)} mins
+                                        </p>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setShowQualityOptions(false);
+                                        setVideoInfo(null);
+                                        setAvailableFormats([]);
+                                    }}
+                                    className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Download Options */}
+                        <div className="p-6">
+                            <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">
+                                Download Options:
+                            </h4>
+
+                            {availableFormats.length > 0 ? (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                    {availableFormats.map((format) => (
+                                        <button
+                                            key={format.format_id}
+                                            onClick={() => downloadVideo(format.format_id)}
+                                            disabled={isDownloading}
+                                            className={`p-4 rounded-xl border-2 transition-all duration-200 flex flex-col items-center justify-center gap-2 ${isDownloading
+                                                ? 'border-slate-200 bg-slate-50 cursor-not-allowed opacity-50'
+                                                : 'border-slate-200 bg-white hover:border-blue-500 hover:bg-blue-50 hover:shadow-md cursor-pointer'
+                                                }`}
+                                        >
+                                            <div className="text-2xl font-bold text-slate-900">
+                                                {format.quality}
+                                            </div>
+                                            <div className="text-xs text-slate-500 uppercase font-semibold">
+                                                {format.ext}
+                                            </div>
+                                            {format.filesize > 0 && (
+                                                <div className="text-xs text-slate-400">
+                                                    {(format.filesize / (1024 * 1024)).toFixed(1)} MB
+                                                </div>
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-8 text-slate-500">
+                                    No download options available
+                                </div>
+                            )}
+
+                            {/* Best Quality Option */}
+                            <div className="mt-6 pt-6 border-t border-slate-200">
+                                <button
+                                    onClick={() => downloadVideo()}
+                                    disabled={isDownloading}
+                                    className={`w-full py-4 rounded-xl shadow-lg transition-all text-sm font-bold uppercase tracking-widest ${isDownloading
+                                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                        : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:-translate-y-0.5'
+                                        }`}
+                                >
+                                    {isDownloading ? (
+                                        <div className="flex items-center justify-center gap-2">
+                                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                            Downloading...
+                                        </div>
+                                    ) : (
+                                        'Download Best Quality'
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
+
     );
 };
 
