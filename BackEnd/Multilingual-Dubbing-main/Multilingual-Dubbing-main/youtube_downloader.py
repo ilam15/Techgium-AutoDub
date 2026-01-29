@@ -1,0 +1,198 @@
+"""
+YouTube Video Downloader Module
+Handles fetching video information and downloading videos with quality selection
+"""
+
+import yt_dlp
+import os
+import logging
+from typing import Dict, List, Optional
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("YouTubeDownloader")
+
+
+class YouTubeDownloader:
+    """
+    High-performance YouTube downloader with quality selection support
+    """
+    
+    def __init__(self, download_dir: str = "temp_downloads"):
+        """
+        Initialize YouTube downloader
+        
+        Args:
+            download_dir: Directory to save downloaded videos
+        """
+        self.download_dir = download_dir
+        os.makedirs(download_dir, exist_ok=True)
+    
+    def get_video_info(self, url: str) -> Dict:
+        """
+        Fetch video information including available formats
+        
+        Args:
+            url: YouTube video URL
+            
+        Returns:
+            Dictionary containing video metadata and available formats
+        """
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                # Extract relevant information
+                video_data = {
+                    'title': info.get('title', 'Unknown'),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'duration': info.get('duration', 0),
+                    'uploader': info.get('uploader', 'Unknown'),
+                    'description': info.get('description', '')[:200],  # First 200 chars
+                    'formats': []
+                }
+                
+                # Process available formats
+                formats_seen = set()
+                for fmt in info.get('formats', []):
+                    # Only include video formats with both video and audio or video-only with reasonable quality
+                    if fmt.get('vcodec') != 'none':
+                        height = fmt.get('height')
+                        if height and height not in formats_seen:
+                            formats_seen.add(height)
+                            
+                            # Determine quality label
+                            quality_label = f"{height}p"
+                            
+                            video_data['formats'].append({
+                                'quality': quality_label,
+                                'height': height,
+                                'format_id': fmt.get('format_id'),
+                                'ext': fmt.get('ext', 'mp4'),
+                                'filesize': fmt.get('filesize', 0),
+                                'has_audio': fmt.get('acodec') != 'none'
+                            })
+                
+                # Sort formats by quality (height)
+                video_data['formats'].sort(key=lambda x: x['height'], reverse=True)
+                
+                # Add common quality options if not present
+                common_qualities = [144, 240, 360, 480, 720, 1080, 1440, 2160]
+                available_heights = {fmt['height'] for fmt in video_data['formats']}
+                
+                for quality in common_qualities:
+                    if quality not in available_heights:
+                        video_data['formats'].append({
+                            'quality': f"{quality}p",
+                            'height': quality,
+                            'format_id': None,
+                            'ext': 'mp4',
+                            'filesize': 0,
+                            'has_audio': True,
+                            'available': False  # Mark as unavailable
+                        })
+                
+                # Re-sort after adding common qualities
+                video_data['formats'].sort(key=lambda x: x['height'])
+                
+                logger.info(f"Successfully fetched info for: {video_data['title']}")
+                return video_data
+                
+        except Exception as e:
+            logger.error(f"Error fetching video info: {str(e)}")
+            raise Exception(f"Failed to fetch video information: {str(e)}")
+    
+    def download_video(self, url: str, quality: str = "720p", filename: Optional[str] = None) -> str:
+        """
+        Download video with specified quality
+        
+        Args:
+            url: YouTube video URL
+            quality: Desired quality (e.g., "720p", "1080p")
+            filename: Optional custom filename
+            
+        Returns:
+            Path to downloaded video file
+        """
+        try:
+            # Extract height from quality string (e.g., "720p" -> 720)
+            height = int(quality.replace('p', ''))
+            
+            # Configure download options
+            ydl_opts = {
+                'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
+                'outtmpl': os.path.join(self.download_dir, filename if filename else '%(title)s.%(ext)s'),
+                'merge_output_format': 'mp4',
+                'quiet': False,
+                'no_warnings': False,
+                'progress_hooks': [self._progress_hook],
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Starting download: {url} at {quality}")
+                info = ydl.extract_info(url, download=True)
+                
+                # Get the downloaded file path
+                downloaded_file = ydl.prepare_filename(info)
+                
+                logger.info(f"Download completed: {downloaded_file}")
+                return downloaded_file
+                
+        except Exception as e:
+            logger.error(f"Error downloading video: {str(e)}")
+            raise Exception(f"Failed to download video: {str(e)}")
+    
+    def _progress_hook(self, d):
+        """Progress hook for download status"""
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '0%')
+            speed = d.get('_speed_str', 'N/A')
+            logger.info(f"Downloading: {percent} at {speed}")
+        elif d['status'] == 'finished':
+            logger.info("Download finished, now merging...")
+    
+    def get_best_quality_available(self, url: str) -> str:
+        """
+        Get the best available quality for a video
+        
+        Args:
+            url: YouTube video URL
+            
+        Returns:
+            Best quality string (e.g., "1080p")
+        """
+        try:
+            info = self.get_video_info(url)
+            available_formats = [fmt for fmt in info['formats'] if fmt.get('available', True)]
+            
+            if available_formats:
+                best = max(available_formats, key=lambda x: x['height'])
+                return best['quality']
+            return "720p"  # Default fallback
+            
+        except Exception as e:
+            logger.error(f"Error getting best quality: {str(e)}")
+            return "720p"  # Default fallback
+
+
+# Standalone usage example
+if __name__ == "__main__":
+    downloader = YouTubeDownloader()
+    
+    # Example: Get video info
+    test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    try:
+        info = downloader.get_video_info(test_url)
+        print(f"Title: {info['title']}")
+        print(f"Available formats: {[fmt['quality'] for fmt in info['formats']]}")
+        
+        # Example: Download video
+        # video_path = downloader.download_video(test_url, quality="720p")
+        # print(f"Downloaded to: {video_path}")
+    except Exception as e:
+        print(f"Error: {e}")
