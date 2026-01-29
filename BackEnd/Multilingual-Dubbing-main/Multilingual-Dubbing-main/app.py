@@ -960,25 +960,71 @@ class SRTDubbing:
 
         with open(file_path, 'r', encoding='utf-8') as file:
             lines = file.readlines()
-            # print(lines)
-            for i in range(0, len(lines), 4):
-                time_info = re.findall(r'(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)', lines[i + 1])
+            
+        # Remove empty lines and clean up
+        cleaned_lines = []
+        for line in lines:
+            cleaned_lines.append(line)
+        
+        i = 0
+        while i < len(cleaned_lines):
+            try:
+                # Skip empty lines
+                while i < len(cleaned_lines) and cleaned_lines[i].strip() == '':
+                    i += 1
+                
+                if i >= len(cleaned_lines):
+                    break
+                
+                # Read index line (should be a number)
+                index_line = cleaned_lines[i].strip()
+                if not index_line.isdigit():
+                    i += 1
+                    continue
+                
+                i += 1
+                if i >= len(cleaned_lines):
+                    break
+                
+                # Read timestamp line
+                timestamp_line = cleaned_lines[i].strip()
+                time_info = re.findall(r'(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)', timestamp_line)
+                
+                if not time_info or len(time_info) == 0:
+                    # Skip this entry if timestamp is malformed
+                    print(f"Warning: Malformed timestamp at line {i}: {timestamp_line}")
+                    i += 1
+                    continue
+                
                 start_time = SRTDubbing.convert_to_millisecond(time_info[0][0])
                 end_time = SRTDubbing.convert_to_millisecond(time_info[0][1])
-
-                text_raw = lines[i + 2].strip()
+                
+                i += 1
+                if i >= len(cleaned_lines):
+                    break
+                
+                # Read text line(s) - may span multiple lines
+                text_lines = []
+                while i < len(cleaned_lines) and cleaned_lines[i].strip() != '':
+                    text_lines.append(cleaned_lines[i].strip())
+                    i += 1
+                
+                if not text_lines:
+                    # Skip empty subtitle
+                    continue
+                
+                text_raw = ' '.join(text_lines)
+                
                 # Try to parse speaker/gender tags: <S:SPEAKER_00|G:Male> Text
-                # Use a more robust regex that ignores case and extra spaces
                 match = re.match(r'<\s*S\s*:\s*(.*?)\s*\|\s*G\s*:\s*(.*?)\s*>\s*(.*)', text_raw, re.IGNORECASE)
                 if match:
                     speaker = match.group(1).strip()
-                    # Standardize gender to 'Male' or 'Female'
                     gender_str = match.group(2).strip().lower()
                     gender = "Female" if "female" in gender_str or "woman" in gender_str or "பெண்" in gender_str else "Male"
                     text = match.group(3).strip()
                 else:
                     speaker = "SPEAKER_00"
-                    gender = "Male" # Default
+                    gender = "Male"  # Default
                     text = text_raw
 
                 current_entry = {
@@ -996,10 +1042,18 @@ class SRTDubbing:
                 entries.append(current_entry)
                 previous_end_time = end_time
                 entry_number += 1
+                
+            except Exception as e:
+                print(f"Error parsing SRT entry at line {i}: {e}")
+                i += 1
+                continue
 
-        with open("entries.json", "w") as file:
+        with open("entries.json", "w", encoding='utf-8') as file:
             json.dump(entries, file, indent=4)
+        
+        print(f"Successfully parsed {len(entries)} subtitle entries")
         return entries
+
 
 
 def dubbing(srt_file_path, langauge, gender, tts_model="Kokoro TTS", voice_name="af_heart", sandbox_dir=None):
