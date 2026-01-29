@@ -6,6 +6,19 @@ import shutil
 from core.config import settings
 from core.logger import logger
 from main_pipeline import ProductionPipeline
+from youtube_downloader import YouTubeDownloader
+from pydantic import BaseModel
+
+# Initialize YouTube downloader
+youtube_dl = YouTubeDownloader()
+
+# Pydantic models for YouTube endpoints
+class YouTubeInfoRequest(BaseModel):
+    url: str
+
+class YouTubeDownloadRequest(BaseModel):
+    url: str
+    quality: str = "720p"
 
 router = APIRouter()
 
@@ -13,7 +26,8 @@ router = APIRouter()
 async def dub_video(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    youtube_video_path: str = Form(None),
     source_lang: str = Form("Automatic"),
     target_lang: str = Form("Hindi"),
     gender: str = Form("Male"),
@@ -21,20 +35,28 @@ async def dub_video(
     hf_token: str = Form(None)
 ):
     try:
-        # 1. Validation
-        if file.size > settings.MAX_FILE_SIZE:
-             raise HTTPException(status_code=400, detail="File too large")
-             
-        # 2. Save Upload within a fresh sandbox
+        # 1. Determine input source
         trace_id = str(uuid.uuid4())[:8]
         pipeline = ProductionPipeline(trace_id=trace_id)
         
-        # Ensure we save the file INTO the sandbox
-        local_input = pipeline.context.get_path(file.filename)
-        with open(local_input, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if youtube_video_path:
+            # Use YouTube downloaded video
+            if not os.path.exists(youtube_video_path):
+                raise HTTPException(status_code=400, detail="YouTube video file not found")
+            local_input = youtube_video_path
+            logger.info(f"Using YouTube video: {trace_id} | Path: {youtube_video_path}")
+        elif file:
+            # Validation for uploaded file
+            if file.size > settings.MAX_FILE_SIZE:
+                raise HTTPException(status_code=400, detail="File too large")
             
-        logger.info(f"Accepted work job: {trace_id} | File: {file.filename}")
+            # Save uploaded file
+            local_input = pipeline.context.get_path(file.filename)
+            with open(local_input, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            logger.info(f"Accepted work job: {trace_id} | File: {file.filename}")
+        else:
+            raise HTTPException(status_code=400, detail="Either file or youtube_video_path must be provided")
 
         # 3. Execute Production Pipeline
         # We run this in a threadpool to keep the API responsive
@@ -62,3 +84,54 @@ async def dub_video(
     except Exception as e:
         logger.error(f"API Error: {e}")
         return {"status": "error", "error": str(e)}
+
+@router.post("/youtube/info")
+async def get_youtube_info(request: YouTubeInfoRequest):
+    """
+    Fetch YouTube video information including available quality options
+    """
+    try:
+        logger.info(f"Fetching YouTube info for: {request.url}")
+        video_info = youtube_dl.get_video_info(request.url)
+        return {
+            "status": "success",
+            "data": video_info
+        }
+    except Exception as e:
+        logger.error(f"YouTube Info Error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/youtube/download")
+async def download_youtube_video(request: YouTubeDownloadRequest):
+    """
+    Download YouTube video with specified quality
+    Returns the local file path that can be used for dubbing
+    """
+    try:
+        logger.info(f"Downloading YouTube video: {request.url} at {request.quality}")
+        
+        # Generate unique filename
+        unique_filename = f"{uuid.uuid4()}_youtube_video.mp4"
+        
+        # Download video
+        video_path = youtube_dl.download_video(
+            url=request.url,
+            quality=request.quality,
+            filename=unique_filename
+        )
+        
+        # Get file info
+        file_size = os.path.getsize(video_path)
+        file_size_mb = round(file_size / (1024 * 1024), 2)
+        
+        logger.info(f"Download complete: {video_path} ({file_size_mb} MB)")
+        
+        return {
+            "status": "success",
+            "file_path": video_path,
+            "filename": os.path.basename(video_path),
+            "size": f"{file_size_mb} MB"
+        }
+    except Exception as e:
+        logger.error(f"YouTube Download Error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))

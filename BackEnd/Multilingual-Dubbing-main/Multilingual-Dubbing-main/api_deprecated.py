@@ -12,6 +12,20 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app import subtitle_maker
 from clean_up import cleanup_unnecessary_files
+from youtube_downloader import YouTubeDownloader
+from pydantic import BaseModel
+
+# Initialize YouTube downloader
+youtube_dl = YouTubeDownloader()
+
+# Pydantic models for request/response
+class YouTubeInfoRequest(BaseModel):
+    url: str
+
+class YouTubeDownloadRequest(BaseModel):
+    url: str
+    quality: str = "720p"
+
 
 app = FastAPI()
 
@@ -24,18 +38,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static directory to serve generated video files
-# We mount the current directory so that relative paths returned by processing logic work
-app.mount("/static", StaticFiles(directory="."), name="static")
-
 @app.get("/")
 def read_root():
     return {"message": "AutoDub API is running"}
 
+
+@app.post("/youtube/info")
+async def get_youtube_info(request: YouTubeInfoRequest):
+    """
+    Fetch YouTube video information including available quality options
+    """
+    try:
+        video_info = youtube_dl.get_video_info(request.url)
+        return {
+            "status": "success",
+            "data": video_info
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/youtube/download")
+async def download_youtube_video(request: YouTubeDownloadRequest):
+    """
+    Download YouTube video with specified quality
+    Returns the local file path that can be used for dubbing
+    """
+    try:
+        # Generate unique filename
+        unique_filename = f"{uuid.uuid4()}_youtube_video.mp4"
+        
+        # Download video
+        video_path = youtube_dl.download_video(
+            url=request.url,
+            quality=request.quality,
+            filename=unique_filename
+        )
+        
+        # Get file info
+        file_size = os.path.getsize(video_path)
+        file_size_mb = round(file_size / (1024 * 1024), 2)
+        
+        return {
+            "status": "success",
+            "file_path": video_path,
+            "filename": os.path.basename(video_path),
+            "size": f"{file_size_mb} MB"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/dub_video")
 async def dub_video(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    youtube_video_path: str = Form(None),
     source_lang: str = Form(...),
     target_lang: str = Form(...),
     gender: str = Form("Male"),
@@ -49,20 +106,33 @@ async def dub_video(
         # make_video should be true to get a video output 
         do_make_video = make_video.lower() == "true"
 
-        # Create temp directory
-        temp_dir = "temp_uploads"
-        os.makedirs(temp_dir, exist_ok=True)
+        # Determine file path - either from upload or YouTube download
+        file_path = None
         
-        # Save uploaded file
-        # Generate unique filename to avoid collisions
-        unique_filename = f"{uuid.uuid4()}_{file.filename}"
-        file_path = os.path.join(temp_dir, unique_filename)
-        
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if youtube_video_path:
+            # Use YouTube downloaded video
+            if not os.path.exists(youtube_video_path):
+                raise HTTPException(status_code=400, detail="YouTube video file not found")
+            file_path = youtube_video_path
+            print(f"Using YouTube downloaded video: {file_path}")
+        elif file:
+            # Create temp directory
+            temp_dir = "temp_uploads"
+            os.makedirs(temp_dir, exist_ok=True)
             
-        print(f"File saved to {file_path}")
+            # Save uploaded file
+            # Generate unique filename to avoid collisions
+            unique_filename = f"{uuid.uuid4()}_{file.filename}"
+            file_path = os.path.join(temp_dir, unique_filename)
+            
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            print(f"File saved to {file_path}")
+        else:
+            raise HTTPException(status_code=400, detail="Either file or youtube_video_path must be provided")
+
         print(f"Processing: Source={source_lang}, Target={target_lang}, Gender={gender}")
+
 
         # Call the core processing logic from app.py
         # subtitle_maker returns: 
@@ -133,6 +203,11 @@ async def dub_video(
     finally:
         # Optional: Clean up temp file if needed, but for preview we might want to keep it
         pass
+
+# Mount static directory to serve generated video files
+# We mount the current directory so that relative paths returned by processing logic work
+app.mount("/static", StaticFiles(directory="."), name="static")
+
 
 if __name__ == "__main__":
     import uvicorn
