@@ -133,51 +133,84 @@ class YouTubeDownloader:
         Returns:
             Path to downloaded video file
         """
-        try:
-            # Extract height from quality string (e.g., "720p" -> 720)
-            height = int(quality.replace('p', ''))
-            
-            # Configure download options
-            ydl_opts = {
-                'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
-                'outtmpl': os.path.join(self.download_dir, filename if filename else '%(title)s.%(ext)s'),
-                'merge_output_format': 'mp4',
-                'quiet': False,
-                'no_warnings': False,
-                'progress_hooks': [self._progress_hook],
-                # Fix 403 Forbidden errors
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-us,en;q=0.5',
-                    'Sec-Fetch-Mode': 'navigate',
-                },
-                # Use Android client for better compatibility
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web'],
-                        'player_skip': ['webpage', 'configs'],
-                    }
-                },
-                # Retry on errors
-                'retries': 10,
-                'fragment_retries': 10,
-                'skip_unavailable_fragments': True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Starting download: {url} at {quality}")
-                info = ydl.extract_info(url, download=True)
+        max_retries = 3
+        retry_count = 0
+        last_error = None
+        
+        while retry_count < max_retries:
+            try:
+                # Extract height from quality string (e.g., "720p" -> 720)
+                height = int(quality.replace('p', ''))
                 
-                # Get the downloaded file path
-                downloaded_file = ydl.prepare_filename(info)
+                # Configure download options with resilience features
+                ydl_opts = {
+                    'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
+                    'outtmpl': os.path.join(self.download_dir, filename if filename else '%(title)s.%(ext)s'),
+                    'merge_output_format': 'mp4',
+                    'quiet': False,
+                    'no_warnings': False,
+                    'progress_hooks': [self._progress_hook],
+                    
+                    # Fix 403 Forbidden errors
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Sec-Fetch-Mode': 'navigate',
+                    },
+                    
+                    # Use Android client for better compatibility
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android', 'web'],
+                            'player_skip': ['webpage', 'configs'],
+                        }
+                    },
+                    
+                    # Enhanced retry and resilience options
+                    'retries': 10,
+                    'fragment_retries': 10,
+                    'skip_unavailable_fragments': True,
+                    'http_chunk_size': 10485760,  # 10MB chunks for better stability
+                    
+                    # Age-restricted video support
+                    'age_limit': None,  # No age limit
+                    
+                    # Network resilience
+                    'socket_timeout': 30,
+                    'source_address': None,  # Bind to default interface
+                }
                 
-                logger.info(f"Download completed: {downloaded_file}")
-                return downloaded_file
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info(f"Starting download (attempt {retry_count + 1}/{max_retries}): {url} at {quality}")
+                    info = ydl.extract_info(url, download=True)
+                    
+                    # Get the downloaded file path
+                    downloaded_file = ydl.prepare_filename(info)
+                    
+                    # Verify file exists
+                    if not os.path.exists(downloaded_file):
+                        raise FileNotFoundError(f"Downloaded file not found: {downloaded_file}")
+                    
+                    logger.info(f"Download completed successfully: {downloaded_file}")
+                    return downloaded_file
+                    
+            except Exception as e:
+                last_error = e
+                retry_count += 1
                 
-        except Exception as e:
-            logger.error(f"Error downloading video: {str(e)}")
-            raise Exception(f"Failed to download video: {str(e)}")
+                if retry_count < max_retries:
+                    # Exponential backoff: 2s, 8s, 32s
+                    wait_time = min(2 ** (retry_count + 1), 60)
+                    logger.warning(f"Download failed (attempt {retry_count}/{max_retries}): {str(e)}")
+                    logger.info(f"Retrying in {wait_time}s...")
+                    
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Download failed after {max_retries} attempts: {str(e)}")
+                    raise Exception(f"Failed to download video after {max_retries} attempts: {str(last_error)}")
+
     
     def _progress_hook(self, d):
         """Progress hook for download status"""
