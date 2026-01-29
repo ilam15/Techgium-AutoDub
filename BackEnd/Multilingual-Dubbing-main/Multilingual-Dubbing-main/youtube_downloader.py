@@ -42,6 +42,20 @@ class YouTubeDownloader:
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
+                # Fix 403 Forbidden errors
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                },
+                # Use Node.js for JavaScript execution (fixes JS runtime warning)
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'],
+                        'player_skip': ['webpage', 'configs'],
+                    }
+                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -125,12 +139,30 @@ class YouTubeDownloader:
             
             # Configure download options
             ydl_opts = {
-                'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
+                'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
                 'outtmpl': os.path.join(self.download_dir, filename if filename else '%(title)s.%(ext)s'),
                 'merge_output_format': 'mp4',
                 'quiet': False,
                 'no_warnings': False,
                 'progress_hooks': [self._progress_hook],
+                # Fix 403 Forbidden errors
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                },
+                # Use Android client for better compatibility
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'],
+                        'player_skip': ['webpage', 'configs'],
+                    }
+                },
+                # Retry on errors
+                'retries': 10,
+                'fragment_retries': 10,
+                'skip_unavailable_fragments': True,
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
