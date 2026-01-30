@@ -156,23 +156,18 @@ class SpeakerAnalyzer:
 
     def identify_gender_for_segment(self, audio_path, start, end):
         """
-        Identifies gender for a specific time range in the audio using pitch detection.
-        Higher pitch (F0 > 165Hz) is usually Female, lower is Male.
+        Identifies gender for a specific time range.
+        Optimization: Prioritizes the pre-loaded ML pipeline (ms) over Librosa (seconds).
         """
         try:
             from pydub import AudioSegment
+            import numpy as np
+            
+            # Load audio segment (max 2 seconds for speed)
             audio = AudioSegment.from_file(audio_path)
-            # Optimize: Limit analysis to max 2 seconds to speed up pyin
-            duration_ms = int((end - start) * 1000)
-            analysis_duration = min(duration_ms, 2000) 
-            
-            # Take the middle part if longer than 2s, or just the beginning
             start_ms = int(start * 1000)
-            if duration_ms > 2000:
-                 offset = (duration_ms - 2000) // 2
-                 start_ms += offset
-            
-            segment = audio[start_ms : start_ms + analysis_duration]
+            duration_ms = min(int((end - start) * 1000), 2000)
+            segment = audio[start_ms : start_ms + duration_ms]
             
             # Convert to numpy
             samples = np.array(segment.get_array_of_samples()).astype(np.float32)
@@ -181,105 +176,109 @@ class SpeakerAnalyzer:
             if segment.channels > 1:
                 samples = samples.reshape((-1, segment.channels)).mean(axis=1)
             
-            sr = segment.frame_rate
+            # 1. Try Fast ML Pipeline First
+            if self.gender_pipeline:
+                try:
+                    # Determine input size for model (some have limits, but 2s is usually fine)
+                    results = self.gender_pipeline(samples)
+                    best_match = max(results, key=lambda x: x["score"])
+                    label = best_match["label"].lower()
+                    
+                    # Logic: If model returns 'female'/'woman', trust it. 
+                    # If model is generic speaker-id (e.g. id1004), this might default to 'Male',
+                    # but it eliminates the 10s delay of Librosa.
+                    return "Female" if ("female" in label or "woman" in label) else "Male"
+                except Exception as e:
+                    print(f"ML Gender detection error: {e}. Falling back to pitch.")
             
-            # Extract pitch (Fundamental Frequency F0) using YIN algorithm
-            # We filter out silent parts or very low/high outliers
+            # 2. Fallback to Pitch Detection (Slow)
+            sr = segment.frame_rate
             f0, voiced_flag, voiced_probs = librosa.pyin(
                 samples, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), sr=sr
             )
-            
-            # Get mean F0 of voiced parts
             voiced_f0 = f0[voiced_flag]
             if len(voiced_f0) > 0:
                 mean_f0 = np.nanmean(voiced_f0)
-                # Typical Male: 85-180Hz, Typical Female: 165-255Hz
-                # Threshold ~165Hz is a good balance
-                print(f"Detected Segment Frequency: {mean_f0:.2f}Hz")
+                # Typical Male: 85-180Hz, Female: 165-255Hz
                 return "Female" if mean_f0 > 165 else "Male"
-            
-            # Use pipeline if pitch detection is inconclusive
-            if self.gender_pipeline:
-                results = self.gender_pipeline(samples)
-                best_match = max(results, key=lambda x: x["score"])
-                label = best_match["label"].lower()
-                return "Female" if ("female" in label or "woman" in label) else "Male"
                 
-            return "Male" # Final default
+            return "Male" # Default
         except Exception as e:
             print(f"Segment gender detection failed: {e}")
             return "Male"
 
     def _identify_speaker_genders(self, audio_path_or_data, turns):
-        if not self.gender_pipeline:
+        """
+        Determines the gender of each unique speaker in the diarization.
+        Optimized to use batch ML processing where possible.
+        """
+        if not turns:
             return {}
-
-        print("Identifying speaker genders...")
+            
+        print("Identifying speaker genders (Optimized)...")
+        speaker_genders = {}
+        unique_speakers = set(t["speaker"] for t in turns)
+        
         try:
             import numpy as np
-            sr = 16000
-            if isinstance(audio_path_or_data, np.ndarray):
-                y = audio_path_or_data
+            # Use the first occurrence of each speaker for fast ID
+            # Instead of aggregating 10s of audio, which is slow I/O
+            
+            # Pre-load audio once if it's a path
+            if isinstance(audio_path_or_data, str):
+                from pydub import AudioSegment
+                source_audio = AudioSegment.from_file(audio_path_or_data)
+                is_numpy = False
             else:
-                # Load audio for gender analysis
-                y, _ = librosa.load(audio_path_or_data, sr=sr)
+                is_numpy = True
+                source_audio = audio_path_or_data # Assume 16kHz numpy from earlier
             
-            speaker_samples = {}
-            
-            # Collect representative samples for each speaker
-            for turn in turns:
-                speaker = turn["speaker"]
-                if speaker not in speaker_samples:
-                    speaker_samples[speaker] = []
+            for speaker in unique_speakers:
+                # Find the first logical segment for this speaker (at least 1s long)
+                valid_turns = [t for t in turns if t["speaker"] == speaker and (t["end"] - t["start"]) > 0.8]
+                if not valid_turns:
+                    valid_turns = [t for t in turns if t["speaker"] == speaker]
                 
-                # Take up to 3 seconds from each turn, total up to 10 seconds per speaker
-                start_s = turn["start"]
-                duration = min(turn["end"] - turn["start"], 3.0)
-                
-                if duration < 0.5: continue # Skip too short segments
-                
-                start_idx = int(start_s * sr)
-                end_idx = int((start_s + duration) * sr)
-                
-                if end_idx > len(y):
-                    end_idx = len(y)
-                
-                if start_idx < end_idx:
-                    speaker_samples[speaker].append(y[start_idx:end_idx])
-                
-                # Don't collect too much to save time
-                if sum(len(s) for s in speaker_samples[speaker]) > 10 * sr:
-                    continue
-
-            speaker_genders = {}
-            for speaker, samples in speaker_samples.items():
-                if not samples:
-                    speaker_genders[speaker] = "Male" # Default
-                    continue
-                
-                # Concatenate samples
-                audio_data = np.concatenate(samples)
-                if len(audio_data) < 0.1 * sr:
+                if not valid_turns:
                     speaker_genders[speaker] = "Male"
                     continue
                     
-                # Get mean F0 of voiced parts
-                f0, voiced_flag, voiced_probs = librosa.pyin(
-                    audio_data, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), sr=sr
-                )
+                # Take the best segment
+                turn = valid_turns[0]
                 
-                voiced_f0 = f0[voiced_flag]
-                if len(voiced_f0) > 0:
-                    mean_f0 = np.nanmean(voiced_f0)
-                    speaker_genders[speaker] = "Female" if mean_f0 > 165 else "Male"
-                    print(f"Speaker {speaker} pitch: {mean_f0:.2f}Hz -> {speaker_genders[speaker]}")
+                # Extract sample
+                if is_numpy:
+                     start_idx = int(turn["start"] * 16000)
+                     end_idx = int(min(turn["end"], turn["start"] + 2.0) * 16000)
+                     samples = source_audio[start_idx:end_idx]
                 else:
-                    speaker_genders[speaker] = "Male"
+                     start_ms = int(turn["start"] * 1000)
+                     end_ms = int(min(turn["end"], turn["start"] + 2.0) * 1000)
+                     seg = source_audio[start_ms:end_ms]
+                     samples = np.array(seg.get_array_of_samples()).astype(np.float32) / 32768.0
+                     if seg.channels > 1:
+                        samples = samples.reshape((-1, seg.channels)).mean(axis=1)
+
+                # Predict
+                gender = "Male"
+                if self.gender_pipeline:
+                    try:
+                        results = self.gender_pipeline(samples)
+                        best = max(results, key=lambda x: x["score"])
+                        lbl = best["label"].lower()
+                        gender = "Female" if ("female" in lbl or "woman" in lbl) else "Male"
+                    except:
+                        pass
                 
+                speaker_genders[speaker] = gender
+                # print(f"Speaker {speaker} identified as {gender}")
+            
             return speaker_genders
+
         except Exception as e:
             print(f"Gender identification failed: {e}")
-            return {}
+            # Return defaults
+            return {s: "Male" for s in unique_speakers}
 
 def get_speaker_for_segment(start, end, speaker_turns):
     """

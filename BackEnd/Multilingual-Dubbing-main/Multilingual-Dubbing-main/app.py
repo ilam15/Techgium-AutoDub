@@ -872,56 +872,64 @@ class SRTDubbing:
                 return
 
             # Check the duration of the generated TTS audio
-            tts_audio = AudioSegment.from_file(tts_filename)
+            try:
+                tts_audio = AudioSegment.from_file(tts_filename)
+            except Exception as e:
+                logger.error(f"Error reading generated TTS file: {e}")
+                return
+
+            # Standardize Audio Format (24kHz Mono) to prevent concat desync
+            tts_audio = tts_audio.set_frame_rate(24000).set_channels(1)
+            
             tts_duration = len(tts_audio)
 
             if actual_duration == 0:
-                # If actual duration is zero, use the original TTS audio without modifications
-                shutil.move(tts_filename, audio_path)
-                return
+                # If actual duration is zero, just export normalized audio
+                tts_audio.export(audio_path, format="wav")
             
             # If TTS audio duration is longer than actual duration, speed up the audio
-            if tts_duration > actual_duration:
+            elif tts_duration > actual_duration:
                 speedup_factor = tts_duration / actual_duration
-                speedup_filename = f"{base_path}/speedup_temp_{unique_id}.wav"
-                
-                # Use ffmpeg to change audio speed with timeout protection
-                try:
-                    result = subprocess.run([
-                        "ffmpeg",
-                        "-i", tts_filename,
-                        "-filter:a", f"atempo={speedup_factor}",
-                        speedup_filename,
-                        "-y"
-                    ], 
-                    capture_output=True,  # Capture instead of DEVNULL to prevent deadlock
-                    timeout=300,  # 5 minute timeout
-                    check=False,  # Don't raise on non-zero exit
-                    text=True
-                    )
+                # Only check fallback if speedup is significant (e.g. > 5%)
+                if speedup_factor > 1.05:
+                    speedup_filename = f"{base_path}/speedup_temp_{unique_id}.wav"
                     
-                    if result.returncode != 0:
-                        logger.error(f"FFmpeg speedup failed: {result.stderr}")
-                        # Fallback: use original audio
-                        shutil.move(tts_filename, audio_path)
-                        return
-                    
-                    # Replace the original TTS audio with the sped-up version
-                    shutil.move(speedup_filename, audio_path)
-                    
-                except subprocess.TimeoutExpired:
-                    logger.error(f"FFmpeg speedup timed out after 300s for text: {text[:50]}")
-                    # Fallback: use original audio
-                    if os.path.exists(tts_filename):
-                        shutil.move(tts_filename, audio_path)
-                    return
-                except Exception as e:
-                    logger.error(f"FFmpeg speedup error: {e}")
-                    # Fallback: use original audio
-                    if os.path.exists(tts_filename):
-                        shutil.move(tts_filename, audio_path)
-                    return
-                
+                    # Use ffmpeg to change audio speed with timeout protection
+                    try:
+                        # We must preserve the format
+                        result = subprocess.run([
+                            "ffmpeg",
+                            "-i", tts_filename,
+                            "-filter:a", f"atempo={speedup_factor},aresample=24000",
+                            "-ac", "1",
+                            "-ar", "24000",
+                            speedup_filename,
+                            "-y"
+                        ], 
+                        capture_output=True, 
+                        timeout=300,  # 5 minute timeout
+                        check=False,
+                        text=True
+                        )
+                        
+                        if result.returncode != 0:
+                            logger.error(f"FFmpeg speedup failed: {result.stderr}")
+                            # Fallback: use original audio
+                            tts_audio.export(audio_path, format="wav")
+
+                        else:
+                             # Replace the original TTS audio with the sped-up version
+                            shutil.move(speedup_filename, audio_path)
+                        
+                    except subprocess.TimeoutExpired:
+                        logger.error(f"FFmpeg speedup timed out after 300s for text: {text[:50]}")
+                        tts_audio.export(audio_path, format="wav")
+                    except Exception as e:
+                        logger.error(f"FFmpeg speedup error: {e}")
+                        tts_audio.export(audio_path, format="wav")
+                else: 
+                     tts_audio.export(audio_path, format="wav")
+
             elif tts_duration < actual_duration:
                 # If TTS audio duration is less than actual duration, add silence to match the duration
                 silence_gap = actual_duration - tts_duration
@@ -931,9 +939,8 @@ class SRTDubbing:
                 # Save the new audio with added silence
                 new_audio.export(audio_path, format="wav")
             else:
-                # If TTS audio duration is equal to actual duration, use the original TTS audio
-                shutil.move(tts_filename, audio_path)
-                
+                # If TTS audio duration is equal to actual duration
+                tts_audio.export(audio_path, format="wav")
         except Exception as e:
             print(f"Error in text_to_speech_srt: {e}")
         finally:
@@ -974,35 +981,83 @@ class SRTDubbing:
         new_folder_path = self.create_folder_for_srt(srt_file_path, base_dir=sandbox_dir)
         join_path = []
         
-        print(f"Generating TTS for {len(result)} segments...")
+        print(f"Generating TTS for {len(result)} segments in parallel...")
+        
+        # 1. Parallel TTS Generation
+        # Map: index -> tts_file_path
+        tts_files_map = {}
         
         with ThreadPoolExecutor(max_workers=10) as executor: 
             futures = []
             for index, i in enumerate(result):
                 text = i['text']
                 actual_duration = i['end_time'] - i['start_time']
-                pause_time = i['pause_time']
+                
+                # Note: pause_time from SRT is IGNORED here. We calculate it dynamically later for sync.
+                
                 speaker_gender = i.get('gender', gender)
-                
-                silent_path = f"{new_folder_path}/pause_{index}.wav"
-                self.make_silence(pause_time, silent_path)
-                
                 tts_path = f"{new_folder_path}/tts_{index}.wav"
+                
                 future = executor.submit(
                     self.text_to_speech_srt, 
                     text, tts_path, language, actual_duration, 
                     gender=speaker_gender, tts_model=tts_model, voice_name=voice_name
                 )
-                futures.append((index, future, silent_path, tts_path))
+                futures.append((index, future, tts_path))
 
-            for index, future, silent_path, tts_path in futures:
+            # Wait for all TTS to complete
+            for index, future, path in futures:
                 try:
                     future.result()
-                    join_path.append(silent_path)
-                    if os.path.exists(tts_path):
-                        join_path.append(tts_path)
+                    if os.path.exists(path):
+                        tts_files_map[index] = path
+                    else:
+                        logger.warning(f"TTS file missing for segment {index}, skipping audio.")
                 except Exception as e:
-                    print(f"Error in TTS segment {index}: {e}")
+                    logger.error(f"Error in TTS segment {index}: {e}")
+
+        # 2. Sequential Assembly (Adaptive Sync)
+        # We reconstruct the timeline based on CRT (SRT) timestamps to correct any drift
+        print("Assembling audio timeline...")
+        current_timeline_time = 0 # in ms
+        
+        # Sort indices to process in order
+        sorted_indices = sorted(tts_files_map.keys())
+        
+        for idx in sorted_indices:
+            tts_path = tts_files_map[idx]
+            original_entry = result[idx]
+            
+            target_start_time = original_entry['start_time']
+            
+            # Calculate required silence to reach target start time from current position
+            silence_duration = target_start_time - current_timeline_time
+            
+            # Add silence if needed (gap)
+            if silence_duration > 10: # Ignore tiny gaps < 10ms
+                silent_path = f"{new_folder_path}/pause_{idx}.wav"
+                self.make_silence(silence_duration, silent_path)
+                join_path.append(silent_path)
+                current_timeline_time += silence_duration
+            elif silence_duration < -100:
+                # Significant overlap detected (>100ms late).
+                # We are running late. The previous segment overran its slot.
+                logger.warning(f"Sync drift: Segment {idx} starts {abs(silence_duration)}ms late.")
+                # We cannot easily 'undo' the previous segment in this file-list model without editing it.
+                # proceed, effectively pushing this segment later.
+            
+            join_path.append(tts_path)
+            
+            # Update current timeline time based on the ACTUAL duration of the TTS file
+            try:
+                # Probe the file or use pydub to get exact duration
+                # Since we standardized to 24k/mono/wav, pydub is fast enough or we trust the file.
+                seg_duration = len(AudioSegment.from_file(tts_path))
+                current_timeline_time += seg_duration
+            except Exception as e:
+                logger.error(f"Error reading duration for {tts_path}: {e}")
+                # Fallback to SRT duration
+                current_timeline_time += (original_entry['end_time'] - original_entry['start_time'])
 
         MediaEngine.concat_audio_files(join_path, dub_save_path)
         
