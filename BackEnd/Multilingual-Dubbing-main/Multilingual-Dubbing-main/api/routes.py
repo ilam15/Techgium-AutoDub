@@ -23,8 +23,8 @@ class YouTubeDownloadRequest(BaseModel):
 
 router = APIRouter()
 
-# Global concurrency control - max 3 parallel dubbing requests
-_active_requests = asyncio.Semaphore(3)
+# Global concurrency control - serialized for CPU efficiency
+_active_requests = asyncio.Semaphore(1)
 _request_timeout = 600  # 10 minutes max per request
 _max_video_duration = 600  # 10 minutes max video length
 
