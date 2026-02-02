@@ -4,7 +4,7 @@ venv311/
 
 # Environment variables (contains secrets)
 .env
-
+engine/lid/lid.176.bin
 # Generated documentation files
 HF_TOKEN_CONFIGURED.md
 START_WITH_DIARIZATION.bat
