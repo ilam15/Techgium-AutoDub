@@ -1,0 +1,24 @@
+1
+00:00:00,000 --> 00:00:02,839
+<S:SPEAKER_00|G:Female> If you still haven't heard about this AI tour, you need to check it out.
+
+2
+00:00:03,020 --> 00:00:05,740
+<S:SPEAKER_00|G:Female> Okay, I'm speaking English to you right now, right?
+
+3
+00:00:17,780 --> 00:00:19,980
+<S:SPEAKER_00|G:Female> The crazy part is that this whole time
+
+4
+00:00:20,000 --> 00:00:25,160
+<S:SPEAKER_00|G:Female> I'm just speaking English and all I did was uploading this video to Heijen's AI translator
+
+5
+00:00:25,160 --> 00:00:29,980
+<S:SPEAKER_00|G:Female> and it clones my voice into different languages that you just heard. If that was impressive in
+
+6
+00:00:30,000 --> 00:00:36,700
+<S:SPEAKER_00|G:Female> It also synced my lips to the new voice so that the final clip looks and sounds as authentic as possible.
+

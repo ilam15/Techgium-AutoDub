@@ -96,7 +96,15 @@ def update_pipeline(Language):
 
 def get_voice_names(repo_id):
     """Fetches and returns a list of voice names (without extensions) from the given Hugging Face repository."""
-    return [os.path.splitext(file.replace("voices/", ""))[0] for file in list_repo_files(repo_id) if file.startswith("voices/")]
+    try:
+        return [os.path.splitext(file.replace("voices/", ""))[0] for file in list_repo_files(repo_id) if file.startswith("voices/")]
+    except Exception as e:
+        # Provide hardcoded fallbacks if HF is unreachable
+        return [
+            "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", 
+            "am_adam", "am_michael", "bf_isabelle", "bm_george", 
+            "af_aoife", "af_jessica", "af_river", "am_fenrir", "am_puck"
+        ]
 
 def create_audio_dir():
     global base_path

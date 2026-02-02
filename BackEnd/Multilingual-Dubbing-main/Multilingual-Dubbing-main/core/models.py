@@ -26,9 +26,13 @@ class ModelManager:
                     cls._instance = super(ModelManager, cls).__new__(cls)
         return cls._instance
 
+    def heartbeat(self, name: str):
+        """Resets the idle timer for a specific model."""
+        with self._lock:
+            self._last_used[name] = time.time()
+
     def get_whisper(self) -> WhisperModel:
         with self._lock:
-            self._last_used["whisper"] = time.time()
             if "whisper" not in self._models:
                 try:
                     logger.info(f"Initializing Whisper Model [{settings.DEVICE}]: {settings.WHISPER_MODEL_NAME}")
@@ -48,20 +52,20 @@ class ModelManager:
                         )
                     else:
                         raise e
+            self._last_used["whisper"] = time.time()
             return self._models["whisper"]
 
     def get_diarization(self, hf_token: str = None) -> SpeakerAnalyzer:
         with self._lock:
-            self._last_used["diarization"] = time.time()
             if "diarization" not in self._models:
                 logger.info("Initializing Speaker Analyzer...")
                 self._models["diarization"] = SpeakerAnalyzer(hf_token=hf_token or settings.HF_TOKEN)
+            self._last_used["diarization"] = time.time()
             return self._models["diarization"]
 
     def get_translator(self):
         from transformers import pipeline
         with self._lock:
-            self._last_used["translator"] = time.time()
             if "translator" not in self._models:
                 device_idx = 0 if settings.DEVICE == "cuda" and torch.cuda.is_available() else -1
                 try:
@@ -81,6 +85,7 @@ class ModelManager:
                         )
                     else:
                         raise e
+            self._last_used["translator"] = time.time()
             return self._models["translator"]
 
     def _cleanup_loop(self):
@@ -89,15 +94,18 @@ class ModelManager:
             now = time.time()
             with self._lock:
                 to_remove = []
-                for name, last_time in self._last_used.items():
+                for name, last_time in list(self._last_used.items()):
+                    # Only unload if idle for longer than the timeout
                     if now - last_time > settings.MODEL_IDLE_TIMEOUT:
                         to_remove.append(name)
                 
                 for name in to_remove:
                     logger.info(f"Unloading idle model: {name}")
-                    del self._models[name]
-                    del self._last_used[name]
-                    
+                    if name in self._models:
+                        del self._models[name]
+                    if name in self._last_used:
+                        del self._last_used[name]
+                
                 if to_remove:
                     self._gpu_cleanup()
 

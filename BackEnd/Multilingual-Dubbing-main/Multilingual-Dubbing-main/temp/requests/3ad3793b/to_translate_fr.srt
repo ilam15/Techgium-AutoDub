@@ -1,0 +1,8 @@
+1
+00:00:10,000 --> 00:00:11,939
+<S:SPEAKER_00|G:Female> Laissez-moi passer en français un instant.
+
+2
+00:00:12,460 --> 00:00:13,519
+<S:SPEAKER_00|G:Female> Mon français sonne comment?
+

@@ -1,0 +1,4 @@
+1
+00:00:05,980 --> 00:00:07,759
+<S:SPEAKER_00|G:Female> But if I tell you that I'm speaking English now,
+

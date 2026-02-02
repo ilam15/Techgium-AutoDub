@@ -29,13 +29,16 @@ def get_log_extra(trace_id=None):
     return {"trace_id": trace_id or "GLOBAL"}
 
 # Initialize MediaEngine with static_ffmpeg path
+from pydub import AudioSegment
 try:
     ffmpeg_exe = shutil.which("ffmpeg")
     if ffmpeg_exe:
         MediaEngine.set_ffmpeg_path(ffmpeg_exe)
-        print(f"MediaEngine using FFmpeg at: {ffmpeg_exe}")
+        AudioSegment.converter = ffmpeg_exe
+        logger.info(f"MediaEngine using FFmpeg at: {ffmpeg_exe}", extra=get_log_extra())
+        logger.info(f"Pydub converter set to: {ffmpeg_exe}", extra=get_log_extra())
 except Exception as e:
-    print(f"Warning: Could not set MediaEngine ffmpeg path: {e}")
+    logger.warning(f"Could not set MediaEngine ffmpeg path: {e}", extra=get_log_extra())
 
 # Model Management Layer with Production Pooling & Idle Timeout
 class InferenceModelManager:
@@ -58,18 +61,10 @@ class InferenceModelManager:
         def cleanup_loop():
             while True:
                 time.sleep(60)
-                # Acquire lock before checking and cleaning up
-                with self._lock:
-                    idle_time = time.time() - self._last_access_time
-                    if self._last_access_time > 0 and idle_time > self._idle_timeout:
-                        if self._whisper_model or self._speaker_analyzer:
-                            logger.info(f"Idle timeout reached ({idle_time:.0f}s). Offloading models to free resources...", extra=get_log_extra())
-                            self._whisper_model = None
-                            self._speaker_analyzer = None
-                            self._last_access_time = 0
-                            gc.collect()
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
+                if self._last_access_time > 0 and (time.time() - self._last_access_time) > self._idle_timeout:
+                    if self._whisper_model or self._speaker_analyzer:
+                        logger.info("Idle timeout reached. Offloading models to free resources...", extra=get_log_extra())
+                        self.clear_cache()
         
         t = threading.Thread(target=cleanup_loop, daemon=True)
         t.start()
@@ -158,6 +153,9 @@ def format_segments(segments):
             "text": text,
             "start": i.start,
             "end": i.end,
+            "language": getattr(i, 'language', None), # Preserving language from selective ASR
+            "whisper_hint": getattr(i, 'whisper_hint', None),
+            "whisper_hint_prob": getattr(i, 'whisper_hint_prob', None),
             "words": []  # Initialize words as an empty list within the sentence
         })
         speech_to_text += text + " "
@@ -468,45 +466,19 @@ def whisper_subtitle(uploaded_file, Source_Language, max_words_per_subtitle=8, h
 from utils import language_dict
 import pysrt
 from deep_translator import GoogleTranslator
-import httpx
-from typing import Optional
 
-# Persistent HTTP client with connection pooling (fixes Windows AsyncIO issues)
-_http_client: Optional[httpx.Client] = None
-_http_client_lock = threading.Lock()
-
-def get_http_client():
-    """Get or create persistent HTTP client with retry configuration"""
-    global _http_client
-    if _http_client is None:
-        with _http_client_lock:
-            if _http_client is None:
-                _http_client = httpx.Client(
-                    timeout=30.0,
-                    limits=httpx.Limits(
-                        max_connections=10,
-                        max_keepalive_connections=5,
-                        keepalive_expiry=30.0
-                    ),
-                    transport=httpx.HTTPTransport(
-                        retries=3,
-                        verify=True
-                    )
-                )
-    return _http_client
-
-def translate_text(text, Source_Language, Destination_Language, max_retries=5):
+def translate_text(text, Source_Language, Destination_Language, max_retries=3):
     """
     Translates the given text using GoogleTranslator, preserving speaker/gender tags.
-    Implements robust retry logic with exponential backoff for connection errors.
-    Uses persistent HTTP session to avoid Windows AsyncIO connection reset issues.
+    Implements retry logic with exponential backoff for connection errors.
     """
     # If source and destination are the same, return original text
     if Source_Language == Destination_Language:
         return text
     
-    source_language = language_dict[Source_Language]['lang_code']
-    target_language = language_dict[Destination_Language]['lang_code']
+    # Safety: If Source_Language is already a code (e.g. 'en', 'hi'), resolve it or use as is
+    source_language = language_dict.get(Source_Language, {}).get('lang_code', Source_Language)
+    target_language = language_dict.get(Destination_Language, {}).get('lang_code', Destination_Language)
 
     # Adjust for specific language codes
     if Destination_Language == "Chinese":
@@ -528,7 +500,7 @@ def translate_text(text, Source_Language, Destination_Language, max_retries=5):
     if not actual_text.strip():
         return text
     
-    # Retry logic with exponential backoff (capped at 30s)
+    # Retry logic with exponential backoff
     for attempt in range(max_retries):
         try:
             translator = GoogleTranslator(source=source_language, target=target_language)
@@ -540,19 +512,18 @@ def translate_text(text, Source_Language, Destination_Language, max_retries=5):
             else:
                 return str(translation)
                 
-        except (ConnectionResetError, ConnectionAbortedError, ConnectionError, OSError) as e:
+        except (ConnectionResetError, ConnectionAbortedError, ConnectionError) as e:
             if attempt < max_retries - 1:
-                # Exponential backoff with cap: 1s, 2s, 4s, 8s, 16s (max 30s)
-                wait_time = min(2 ** attempt, 30)
-                logger.warning(f"Connection error on attempt {attempt + 1}/{max_retries}: {e}. Retrying in {wait_time}s...")
+                wait_time = (2 ** attempt) * 0.5  # Exponential backoff: 0.5s, 1s, 2s
+                print(f"Connection error on attempt {attempt + 1}/{max_retries}. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
-                logger.error(f"Translation failed after {max_retries} attempts: {e}. Returning original text.")
+                print(f"Translation failed after {max_retries} attempts: {e}. Returning original text.")
                 # Return original text with tag if present
                 return text
                 
         except Exception as e:
-            logger.warning(f"Translation error: {e}. Returning original text.")
+            print(f"Translation error: {e}. Returning original text.")
             return text
     
     return text
@@ -572,7 +543,6 @@ def translate_subtitle(subtitles, Source_Language, Destination_Language):
     """
     Translates subtitles using robust ID-based batching.
     Extracts speaker/gender tags before translation to prevent mangling.
-    Implements per-subtitle error handling to prevent batch failures.
     """
     global language_dict, _translation_cache
     if Source_Language == Destination_Language:
@@ -593,51 +563,35 @@ def translate_subtitle(subtitles, Source_Language, Destination_Language):
             tagged_lines = []
             
             for idx, sub in enumerate(batch_subs):
-                try:
-                    match = re.match(r'(<S:.*?\|G:.*?>) (.*)', sub.text)
-                    if match:
-                        tag_map[idx] = match.group(1)
-                        actual_text = match.group(2)
-                    else:
-                        tag_map[idx] = ""
-                        actual_text = sub.text
-                    
-                    # Wrap ONLY the actual text in protection IDs
-                    tagged_lines.append(f"[#{idx}#] {actual_text} [#{idx}#]")
-                except Exception as e:
-                    logger.warning(f"Error preparing subtitle {idx}: {e}")
-                    tagged_lines.append(f"[#{idx}#] {sub.text} [#{idx}#]")
+                match = re.match(r'(<S:.*?\|G:.*?>) (.*)', sub.text)
+                if match:
+                    tag_map[idx] = match.group(1)
+                    actual_text = match.group(2)
+                else:
                     tag_map[idx] = ""
+                    actual_text = sub.text
+                
+                # Wrap ONLY the actual text in protection IDs
+                tagged_lines.append(f"[#{idx}#] {actual_text} [#{idx}#]")
             
+            combined_text = "\n".join(tagged_lines)
             # Use raw translation on the protected block
-            try:
-                combined_text = "\n".join(tagged_lines)
-                translated_block = translate_text(combined_text, Source_Language, Destination_Language)
-            except Exception as e:
-                logger.error(f"Batch translation failed: {e}. Using original text for batch.")
-                translated_block = combined_text
+            translated_block = translate_text(combined_text, Source_Language, Destination_Language)
             
             # Extract by ID and re-attach tags
             results = []
             for idx in range(len(batch_subs)):
-                try:
-                    pattern = rf"\[#{idx}#\](.*?)(?=\[#{idx}#\]|$)"
-                    match = re.search(pattern, translated_block, re.DOTALL)
-                    if match:
-                        cleaned_translation = match.group(1).strip()
-                        # Re-attach the shielded tag
-                        if tag_map[idx]:
-                            results.append(f"{tag_map[idx]} {cleaned_translation}")
-                        else:
-                            results.append(cleaned_translation)
+                pattern = rf"\[#{idx}#\](.*?)(?=\[#{idx}#\]|$)"
+                match = re.search(pattern, translated_block, re.DOTALL)
+                if match:
+                    cleaned_translation = match.group(1).strip()
+                    # Re-attach the shielded tag
+                    if tag_map[idx]:
+                        results.append(f"{tag_map[idx]} {cleaned_translation}")
                     else:
-                        # Fallback to original if extraction fails
-                        logger.warning(f"Failed to extract translation for subtitle {idx}, using original")
-                        results.append(batch_subs[idx].text)
-                except Exception as e:
-                    logger.warning(f"Error processing subtitle {idx}: {e}. Using original text.")
+                        results.append(cleaned_translation)
+                else:
                     results.append(batch_subs[idx].text)
-            
             return results
 
         batch_results = list(executor.map(process_batch, batches))
@@ -780,23 +734,49 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
         tts_path = tts(text, Language=lang, speed=speed, Gender=gender)
 
     # 3. Elastic Speed Engine (Architecture P1)
-    tts_audio = AudioSegment.from_file(tts_path)
-    tts_duration = len(tts_audio)
-    
-    if actual_duration > 0:
-        # Avoid robotic speedup (> 1.25x)
-        raw_speed_factor = tts_duration / actual_duration
-        safe_speed_factor = min(raw_speed_factor, 1.25)
-        
-        if raw_speed_factor > 1.05: # Only re-generate if > 5% difference
-            # logger.info(f"Elastic Sync: Required {raw_speed_factor:.2f}x | Capping at {safe_speed_factor:.2f}x")
-            if tts_model == "Kokoro TTS":
-                tts_path, _, _, _, _ = single_tts(text, Language=norm_lang, voice=voice_name, speed=safe_speed_factor)
-                if tts_path: tts_path = edge_silence_remove(tts_path)
-            else:
-                tts_path = tts(text, Language=lang, speed=safe_speed_factor, Gender=gender)
+    if not tts_path or not os.path.exists(tts_path):
+        logger.error(f"TTS generation failed to produce a file for: {text[:30]}")
+        return None
 
-    shutil.copy(tts_path, audio_path)
+    try:
+        if actual_duration > 0:
+            # 3. Precision Timing & Elastic Stretching (Lipsync Foundation)
+            # Calculate the current duration
+            tts_audio = AudioSegment.from_file(tts_path)
+            current_dur_ms = len(tts_audio)
+            target_dur_ms = int(actual_duration * 1000)
+            
+            # If difference is > 50ms, we must stretch to ensure perfect lipsync
+            if abs(current_dur_ms - target_dur_ms) > 50:
+                logger.info(f"⏳ Precision stretching: {current_dur_ms}ms -> {target_dur_ms}ms for segment lip-sync")
+                stretch_factor = current_dur_ms / target_dur_ms
+                
+                # Use FFmpeg atempo for high-quality time stretching without pitch shift
+                stretched_path = tts_path.replace(".wav", "_stretched.wav")
+                # atempo filter supports 0.5 to 2.0. If outside, we chain them.
+                if stretch_factor < 0.5:
+                    atempo = "atempo=0.5,atempo=" + str(stretch_factor/0.5)
+                elif stretch_factor > 2.0:
+                    atempo = "atempo=2.0,atempo=" + str(stretch_factor/2.0)
+                else:
+                    atempo = f"atempo={stretch_factor}"
+                
+                cmd = [
+                    MediaEngine.FFMPEG_PATH, "-y", "-i", tts_path,
+                    "-filter:a", atempo,
+                    "-ar", "44100",
+                    stretched_path
+                ]
+                subprocess.run(cmd, capture_output=True, check=True)
+                tts_path = stretched_path
+
+        if tts_path and os.path.exists(tts_path):
+            shutil.copy(tts_path, audio_path)
+            return audio_path
+    except Exception as e:
+        logger.error(f"Error in your_tts processing: {e}")
+    
+    return None
 
 
 
@@ -872,64 +852,31 @@ class SRTDubbing:
                 return
 
             # Check the duration of the generated TTS audio
-            try:
-                tts_audio = AudioSegment.from_file(tts_filename)
-            except Exception as e:
-                logger.error(f"Error reading generated TTS file: {e}")
-                return
-
-            # Standardize Audio Format (24kHz Mono) to prevent concat desync
-            tts_audio = tts_audio.set_frame_rate(24000).set_channels(1)
-            
+            tts_audio = AudioSegment.from_file(tts_filename)
             tts_duration = len(tts_audio)
 
             if actual_duration == 0:
-                # If actual duration is zero, just export normalized audio
-                tts_audio.export(audio_path, format="wav")
+                # If actual duration is zero, use the original TTS audio without modifications
+                shutil.move(tts_filename, audio_path)
+                return
             
             # If TTS audio duration is longer than actual duration, speed up the audio
-            elif tts_duration > actual_duration:
+            if tts_duration > actual_duration:
                 speedup_factor = tts_duration / actual_duration
-                # Only check fallback if speedup is significant (e.g. > 5%)
-                if speedup_factor > 1.05:
-                    speedup_filename = f"{base_path}/speedup_temp_{unique_id}.wav"
-                    
-                    # Use ffmpeg to change audio speed with timeout protection
-                    try:
-                        # We must preserve the format
-                        result = subprocess.run([
-                            "ffmpeg",
-                            "-i", tts_filename,
-                            "-filter:a", f"atempo={speedup_factor},aresample=24000",
-                            "-ac", "1",
-                            "-ar", "24000",
-                            speedup_filename,
-                            "-y"
-                        ], 
-                        capture_output=True, 
-                        timeout=300,  # 5 minute timeout
-                        check=False,
-                        text=True
-                        )
-                        
-                        if result.returncode != 0:
-                            logger.error(f"FFmpeg speedup failed: {result.stderr}")
-                            # Fallback: use original audio
-                            tts_audio.export(audio_path, format="wav")
+                speedup_filename = f"{base_path}/speedup_temp_{unique_id}.wav"
+                # Use ffmpeg to change audio speed
+                # Silence ffmpeg output to reduce log clutter
+                subprocess.run([
+                    "ffmpeg",
+                    "-i", tts_filename,
+                    "-filter:a", f"atempo={speedup_factor}",
+                    speedup_filename,
+                    "-y"
+                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                        else:
-                             # Replace the original TTS audio with the sped-up version
-                            shutil.move(speedup_filename, audio_path)
-                        
-                    except subprocess.TimeoutExpired:
-                        logger.error(f"FFmpeg speedup timed out after 300s for text: {text[:50]}")
-                        tts_audio.export(audio_path, format="wav")
-                    except Exception as e:
-                        logger.error(f"FFmpeg speedup error: {e}")
-                        tts_audio.export(audio_path, format="wav")
-                else: 
-                     tts_audio.export(audio_path, format="wav")
-
+                # Replace the original TTS audio with the sped-up version
+                shutil.move(speedup_filename, audio_path)
+                
             elif tts_duration < actual_duration:
                 # If TTS audio duration is less than actual duration, add silence to match the duration
                 silence_gap = actual_duration - tts_duration
@@ -939,8 +886,9 @@ class SRTDubbing:
                 # Save the new audio with added silence
                 new_audio.export(audio_path, format="wav")
             else:
-                # If TTS audio duration is equal to actual duration
-                tts_audio.export(audio_path, format="wav")
+                # If TTS audio duration is equal to actual duration, use the original TTS audio
+                shutil.move(tts_filename, audio_path)
+                
         except Exception as e:
             print(f"Error in text_to_speech_srt: {e}")
         finally:
@@ -981,83 +929,35 @@ class SRTDubbing:
         new_folder_path = self.create_folder_for_srt(srt_file_path, base_dir=sandbox_dir)
         join_path = []
         
-        print(f"Generating TTS for {len(result)} segments in parallel...")
-        
-        # 1. Parallel TTS Generation
-        # Map: index -> tts_file_path
-        tts_files_map = {}
+        print(f"Generating TTS for {len(result)} segments...")
         
         with ThreadPoolExecutor(max_workers=10) as executor: 
             futures = []
             for index, i in enumerate(result):
                 text = i['text']
                 actual_duration = i['end_time'] - i['start_time']
-                
-                # Note: pause_time from SRT is IGNORED here. We calculate it dynamically later for sync.
-                
+                pause_time = i['pause_time']
                 speaker_gender = i.get('gender', gender)
-                tts_path = f"{new_folder_path}/tts_{index}.wav"
                 
+                silent_path = f"{new_folder_path}/pause_{index}.wav"
+                self.make_silence(pause_time, silent_path)
+                
+                tts_path = f"{new_folder_path}/tts_{index}.wav"
                 future = executor.submit(
                     self.text_to_speech_srt, 
                     text, tts_path, language, actual_duration, 
                     gender=speaker_gender, tts_model=tts_model, voice_name=voice_name
                 )
-                futures.append((index, future, tts_path))
+                futures.append((index, future, silent_path, tts_path))
 
-            # Wait for all TTS to complete
-            for index, future, path in futures:
+            for index, future, silent_path, tts_path in futures:
                 try:
                     future.result()
-                    if os.path.exists(path):
-                        tts_files_map[index] = path
-                    else:
-                        logger.warning(f"TTS file missing for segment {index}, skipping audio.")
+                    join_path.append(silent_path)
+                    if os.path.exists(tts_path):
+                        join_path.append(tts_path)
                 except Exception as e:
-                    logger.error(f"Error in TTS segment {index}: {e}")
-
-        # 2. Sequential Assembly (Adaptive Sync)
-        # We reconstruct the timeline based on CRT (SRT) timestamps to correct any drift
-        print("Assembling audio timeline...")
-        current_timeline_time = 0 # in ms
-        
-        # Sort indices to process in order
-        sorted_indices = sorted(tts_files_map.keys())
-        
-        for idx in sorted_indices:
-            tts_path = tts_files_map[idx]
-            original_entry = result[idx]
-            
-            target_start_time = original_entry['start_time']
-            
-            # Calculate required silence to reach target start time from current position
-            silence_duration = target_start_time - current_timeline_time
-            
-            # Add silence if needed (gap)
-            if silence_duration > 10: # Ignore tiny gaps < 10ms
-                silent_path = f"{new_folder_path}/pause_{idx}.wav"
-                self.make_silence(silence_duration, silent_path)
-                join_path.append(silent_path)
-                current_timeline_time += silence_duration
-            elif silence_duration < -100:
-                # Significant overlap detected (>100ms late).
-                # We are running late. The previous segment overran its slot.
-                logger.warning(f"Sync drift: Segment {idx} starts {abs(silence_duration)}ms late.")
-                # We cannot easily 'undo' the previous segment in this file-list model without editing it.
-                # proceed, effectively pushing this segment later.
-            
-            join_path.append(tts_path)
-            
-            # Update current timeline time based on the ACTUAL duration of the TTS file
-            try:
-                # Probe the file or use pydub to get exact duration
-                # Since we standardized to 24k/mono/wav, pydub is fast enough or we trust the file.
-                seg_duration = len(AudioSegment.from_file(tts_path))
-                current_timeline_time += seg_duration
-            except Exception as e:
-                logger.error(f"Error reading duration for {tts_path}: {e}")
-                # Fallback to SRT duration
-                current_timeline_time += (original_entry['end_time'] - original_entry['start_time'])
+                    print(f"Error in TTS segment {index}: {e}")
 
         MediaEngine.concat_audio_files(join_path, dub_save_path)
         
@@ -1085,8 +985,6 @@ class SRTDubbing:
     @staticmethod
     def read_srt_file(file_path):
         entries = []
-        errors = []
-        skipped = 0
         default_start = 0
         previous_end_time = default_start
         entry_number = 1
@@ -1095,75 +993,25 @@ class SRTDubbing:
 
         with open(file_path, 'r', encoding='utf-8') as file:
             lines = file.readlines()
-            
-        # Remove empty lines and clean up
-        cleaned_lines = []
-        for line in lines:
-            cleaned_lines.append(line)
-        
-        i = 0
-        while i < len(cleaned_lines):
-            try:
-                # Skip empty lines
-                while i < len(cleaned_lines) and cleaned_lines[i].strip() == '':
-                    i += 1
-                
-                if i >= len(cleaned_lines):
-                    break
-                
-                # Read index line (should be a number)
-                index_line = cleaned_lines[i].strip()
-                if not index_line.isdigit():
-                    i += 1
-                    continue
-                
-                i += 1
-                if i >= len(cleaned_lines):
-                    break
-                
-                # Read timestamp line
-                timestamp_line = cleaned_lines[i].strip()
-                time_info = re.findall(r'(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)', timestamp_line)
-                
-                if not time_info or len(time_info) == 0:
-                    # Skip this entry if timestamp is malformed
-                    error_msg = f"Malformed timestamp at line {i}: {timestamp_line}"
-                    print(f"Warning: {error_msg}")
-                    errors.append(error_msg)
-                    skipped += 1
-                    i += 1
-                    continue
-                
+            # print(lines)
+            for i in range(0, len(lines), 4):
+                time_info = re.findall(r'(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)', lines[i + 1])
                 start_time = SRTDubbing.convert_to_millisecond(time_info[0][0])
                 end_time = SRTDubbing.convert_to_millisecond(time_info[0][1])
-                
-                i += 1
-                if i >= len(cleaned_lines):
-                    break
-                
-                # Read text line(s) - may span multiple lines
-                text_lines = []
-                while i < len(cleaned_lines) and cleaned_lines[i].strip() != '':
-                    text_lines.append(cleaned_lines[i].strip())
-                    i += 1
-                
-                if not text_lines:
-                    # Skip empty subtitle
-                    skipped += 1
-                    continue
-                
-                text_raw = ' '.join(text_lines)
-                
+
+                text_raw = lines[i + 2].strip()
                 # Try to parse speaker/gender tags: <S:SPEAKER_00|G:Male> Text
+                # Use a more robust regex that ignores case and extra spaces
                 match = re.match(r'<\s*S\s*:\s*(.*?)\s*\|\s*G\s*:\s*(.*?)\s*>\s*(.*)', text_raw, re.IGNORECASE)
                 if match:
                     speaker = match.group(1).strip()
+                    # Standardize gender to 'Male' or 'Female'
                     gender_str = match.group(2).strip().lower()
                     gender = "Female" if "female" in gender_str or "woman" in gender_str or "பெண்" in gender_str else "Male"
                     text = match.group(3).strip()
                 else:
                     speaker = "SPEAKER_00"
-                    gender = "Male"  # Default
+                    gender = "Male" # Default
                     text = text_raw
 
                 current_entry = {
@@ -1181,36 +1029,10 @@ class SRTDubbing:
                 entries.append(current_entry)
                 previous_end_time = end_time
                 entry_number += 1
-                
-            except Exception as e:
-                error_msg = f"Error parsing SRT entry at line {i}: {e}"
-                print(error_msg)
-                errors.append(error_msg)
-                skipped += 1
-                i += 1
-                continue
 
-        # Validation: Check if we got any valid entries
-        if not entries:
-            error_summary = "\n".join(errors[:10])  # Show first 10 errors
-            raise ValueError(f"No valid SRT entries found in {file_path}. Errors:\n{error_summary}")
-        
-        # Check failure rate
-        total_attempted = len(entries) + skipped
-        failure_rate = skipped / total_attempted if total_attempted > 0 else 0
-        
-        if failure_rate > 0.1:  # >10% failure rate
-            logger.warning(f"High SRT parse failure rate: {skipped}/{total_attempted} ({failure_rate*100:.1f}%) entries failed")
-            if errors:
-                logger.warning(f"Sample errors: {errors[:3]}")
-        
-        # Save parsed entries
-        with open("entries.json", "w", encoding='utf-8') as file:
+        with open("entries.json", "w") as file:
             json.dump(entries, file, indent=4)
-        
-        logger.info(f"Successfully parsed {len(entries)} subtitle entries (skipped {skipped})")
         return entries
-
 
 
 def dubbing(srt_file_path, langauge, gender, tts_model="Kokoro TTS", voice_name="af_heart", sandbox_dir=None):
@@ -1357,8 +1179,6 @@ def replace_audio(video_path, new_audio_path, output_path):
 
 import gradio as gr
 import click
-import atexit
-import signal
 
 base_path="."
 subtitle_folder=f"{base_path}/generated_subtitle"
@@ -1368,102 +1188,6 @@ if not os.path.exists(subtitle_folder):
     os.makedirs(subtitle_folder, exist_ok=True)
 if not os.path.exists(temp_folder):
     os.makedirs(temp_folder, exist_ok=True)
-
-# Global cleanup registry for guaranteed cleanup
-_cleanup_registry = set()
-_cleanup_lock = threading.Lock()
-
-def register_for_cleanup(path):
-    """Register a file or directory for cleanup on shutdown"""
-    with _cleanup_lock:
-        _cleanup_registry.add(path)
-
-def unregister_from_cleanup(path):
-    """Remove a path from cleanup registry (e.g., after successful processing)"""
-    with _cleanup_lock:
-        _cleanup_registry.discard(path)
-
-def force_cleanup():
-    """Force cleanup of all registered paths. Called on shutdown."""
-    logger.info("Running forced cleanup...")
-    with _cleanup_lock:
-        for path in list(_cleanup_registry):
-            try:
-                if os.path.exists(path):
-                    if os.path.isdir(path):
-                        shutil.rmtree(path, ignore_errors=True)
-                        logger.info(f"Cleaned up directory: {path}")
-                    else:
-                        os.remove(path)
-                        logger.info(f"Cleaned up file: {path}")
-                _cleanup_registry.discard(path)
-            except Exception as e:
-                logger.warning(f"Failed to cleanup {path}: {e}")
-
-def check_disk_space(min_gb=5):
-    """Check if sufficient disk space is available"""
-    try:
-        stat = shutil.disk_usage(".")
-        free_gb = stat.free / (1024**3)
-        if free_gb < min_gb:
-            logger.warning(f"Low disk space: {free_gb:.1f}GB free (minimum {min_gb}GB)")
-            # Try to clean up old temp files
-            cleanup_old_temp_files()
-            # Check again
-            stat = shutil.disk_usage(".")
-            free_gb = stat.free / (1024**3)
-            if free_gb < min_gb:
-                raise RuntimeError(f"Insufficient disk space: {free_gb:.1f}GB free (minimum {min_gb}GB required)")
-        return free_gb
-    except Exception as e:
-        logger.error(f"Disk space check failed: {e}")
-        return 0
-
-def cleanup_old_temp_files(max_age_hours=24):
-    """Clean up temp files older than max_age_hours"""
-    import time
-    current_time = time.time()
-    max_age_seconds = max_age_hours * 3600
-    cleaned_count = 0
-    
-    temp_dirs = ["temp", "temp_downloads", "temp_uploads", "subtitle_audio", "audio", "audio_data"]
-    
-    for temp_dir in temp_dirs:
-        if not os.path.exists(temp_dir):
-            continue
-        
-        try:
-            for root, dirs, files in os.walk(temp_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    try:
-                        file_age = current_time - os.path.getmtime(file_path)
-                        if file_age > max_age_seconds:
-                            os.remove(file_path)
-                            cleaned_count += 1
-                    except:
-                        pass
-        except Exception as e:
-            logger.warning(f"Error cleaning {temp_dir}: {e}")
-    
-    if cleaned_count > 0:
-        logger.info(f"Cleaned up {cleaned_count} old temp files")
-
-# Register cleanup handlers
-atexit.register(force_cleanup)
-
-# Handle termination signals (Windows-compatible)
-def signal_handler(signum, frame):
-    logger.info(f"Received signal {signum}, cleaning up...")
-    force_cleanup()
-    import sys
-    sys.exit(0)
-
-try:
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-except:
-    pass  # Some signals may not be available on Windows
 
 source_lang_list = ['Automatic',"English","Hindi","Bengali"]
 
@@ -1564,31 +1288,21 @@ def subtitle_maker(Audio_or_Video_File, Source_Language, Destination_Language, s
 
 from huggingface_hub import list_repo_files
 
-# Lazy-loaded voice names cache with fallback
-_voice_names_cache = None
-_voice_names_fallback = ["af_heart", "af_bella", "af_sky", "af_nicole", "am_adam", "am_michael"]
-
 def get_voice_names(repo_id):
-    return [os.path.splitext(file.replace("voices/", ""))[0] for file in list_repo_files(repo_id) if file.startswith("voices/")]
+    try:
+        # Attempt to fetch from HF with a short timeout if possible (list_repo_files doesn't directly support timeout in some versions)
+        return [os.path.splitext(file.replace("voices/", ""))[0] for file in list_repo_files(repo_id) if file.startswith("voices/")]
+    except Exception as e:
+        logger.warning(f"Failed to fetch voice list from Hugging Face: {e}. Using production fallbacks.")
+        # Production-grade fallbacks for Kokoro-82M
+        return [
+            "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", 
+            "am_adam", "am_michael", "bf_isabelle", "bm_george", 
+            "af_aoife", "af_jessica", "af_river", "am_fenrir", "am_puck"
+        ]
 
-def get_voice_names_safe(repo_id="hexgrad/Kokoro-82M"):
-    """
-    Lazy-load voice names from HuggingFace with fallback.
-    This prevents blocking import-time API calls.
-    """
-    global _voice_names_cache
-    if _voice_names_cache is None:
-        try:
-            logger.info("Fetching voice names from HuggingFace...")
-            _voice_names_cache = get_voice_names(repo_id)
-            logger.info(f"Loaded {len(_voice_names_cache)} voice names from HF")
-        except Exception as e:
-            logger.warning(f"Failed to fetch voice names from HF: {e}. Using fallback list.")
-            _voice_names_cache = _voice_names_fallback
-    return _voice_names_cache
-
-# lang_list = ['American English', 'British English', 'Hindi', 'Spanish', 'French', 'Italian', 'Brazilian Portuguese']
-# REMOVED: voice_names = get_voice_names("hexgrad/Kokoro-82M")  # This was blocking import!
+# Fetch voices with robust error handling to prevent boot cycle failure
+voice_names = get_voice_names("hexgrad/Kokoro-82M")
 
 import gradio as gr
 
@@ -1603,7 +1317,7 @@ def old_ui():
                 source_lang = gr.Dropdown(label="Source Language", choices=source_lang_list,  value="English")#,value="Automatic")
                 target_lang = gr.Dropdown(label="Translate Into", choices=target_lang_list, value="English")
                 tts_model=gr.Dropdown(label="🤖 TTS MODEl", choices=["Kokoro TTS","Edge TTS"], value="Kokoro TTS")
-                voice_name = gr.Dropdown(label="🗣️ Voice", choices=get_voice_names_safe(), value="af_heart")  # Lazy load here
+                voice_name = gr.Dropdown(label="🗣️ Voice", choices=voice_names, value="af_heart")
                 gender = gr.Dropdown(label="Dub Voice Gender", choices=['Male', 'Female'], value="Male")
                 recover_music = gr.Checkbox(label="Recover Background Music", value=False)
                 make_video = gr.Checkbox(label="Make Video", value=False)

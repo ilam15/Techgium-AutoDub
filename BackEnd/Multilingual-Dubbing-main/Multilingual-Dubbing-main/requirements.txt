@@ -26,4 +26,5 @@ num2words
 spacy
 phonemizer
 loguru
-yt-dlp
+fasttext-wheel
+langid

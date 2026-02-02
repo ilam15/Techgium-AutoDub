@@ -113,6 +113,28 @@ class MediaEngine:
         return output_path
 
     @classmethod
+    def slice_audio(cls, input_path: str, start: float, end: float, output_path: str):
+        """
+        Slices audio/video and normalizes it for the production mix.
+        Ensures consistent sample rate and format to prevent 'muted' outputs in amix.
+        """
+        duration = end - start
+        command = [
+            cls.FFMPEG_PATH,
+            "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(start),
+            "-t", str(duration),
+            "-i", input_path,
+            "-acodec", "pcm_s16le", # Production quality PCM
+            "-ar", "44100",        # Normalized for mixing
+            "-ac", "1",            # Mono
+            os.path.abspath(output_path)
+        ]
+        
+        subprocess.run(command, check=True)
+        return output_path
+
+    @classmethod
     def extract_audio_numpy(cls, video_path: str, sr: int = 16000) -> "np.ndarray":
         """
         Extracts audio from video and returns as a NumPy array.
@@ -141,6 +163,51 @@ class MediaEngine:
             logger.error(f"FFmpeg numpy extraction failed: {error.decode()}")
             raise RuntimeError(f"FFmpeg numpy extraction failed: {error.decode()}")
             
+        return np.frombuffer(output, dtype=np.int16).astype(np.float32) / 32768.0
+
+    @classmethod
+    def extract_pure_audio_numpy(cls, video_path: str, sr: int = 16000) -> "np.ndarray":
+        """
+        Extracts PURE AUDIO from video, ignoring all subtitles and captions.
+        
+        CRITICAL for AI-generated videos with English captions where:
+        - Captions are in English
+        - But audio is in multiple languages (Hindi, French, German, etc.)
+        
+        This method ensures Whisper analyzes the AUDIO LANGUAGE, not caption text.
+        
+        Differences from extract_audio_numpy:
+        - Explicitly removes all subtitle streams (-sn)
+        - Ignores burned-in captions (only processes audio stream)
+        - Forces audio-only analysis for language detection
+        """
+        import numpy as np
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Source video not found: {video_path}")
+
+        command = [
+            cls.FFMPEG_PATH,
+            "-y", "-hide_banner", "-loglevel", "error",
+            "-i", video_path,
+            "-vn",              # No video (ignore burned-in captions)
+            "-sn",              # No subtitles (ignore subtitle streams)
+            "-acodec", "pcm_s16le",
+            "-ar", str(sr),
+            "-ac", "1",
+            "-f", "s16le",      # Raw PCM
+            "pipe:1"
+        ]
+        
+        logger.info("🎵 Extracting PURE AUDIO (ignoring all captions/subtitles) for language detection")
+        
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, error = process.communicate()
+        
+        if process.returncode != 0:
+            logger.error(f"FFmpeg pure audio extraction failed: {error.decode()}")
+            raise RuntimeError(f"FFmpeg pure audio extraction failed: {error.decode()}")
+            
+        logger.info("✅ Pure audio extracted successfully - Whisper will analyze AUDIO LANGUAGE only")
         return np.frombuffer(output, dtype=np.int16).astype(np.float32) / 32768.0
 
     @classmethod

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Use int8 on CPU to avoid float16 errors
     COMPUTE_TYPE: str = "float16" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "int8"
     HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
-    MODEL_IDLE_TIMEOUT: int = 300 # Seconds
+    MODEL_IDLE_TIMEOUT: int = 1200 # 20 minutes (Prevent unloading during long CPU runs)
     
     # API Limits
     MAX_FILE_SIZE: int = 500 * 1024 * 1024 # 500MB

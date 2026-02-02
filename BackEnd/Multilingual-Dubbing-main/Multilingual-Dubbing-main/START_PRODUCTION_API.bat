@@ -16,8 +16,11 @@ echo Synchronizing production dependencies...
 echo Done.
 
 echo.
-echo [2/3] Cleaning up stale Python processes...
-taskkill /F /IM python.exe 2>nul
+echo [2/3] Cleaning up stale processes on port 8000...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000') do (
+    echo [!] Found stale process PID %%a on port 8000. Terminating...
+    taskkill /F /PID %%a 2>nul
+)
 echo Done.
 
 echo.
@@ -30,12 +33,13 @@ echo.
 
 cd /d "%~dp0"
 set PYTHONPATH=%CD%
-.\venv311\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 --timeout-keep-alive 300
+:: Removed --workers 1 for better stability on Windows
+.\venv311\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300
 
 if %ERRORLEVEL% neq 0 (
     echo.
     echo [!] CRITICAL: Server crashed or failed to start.
-    echo Attempting single-worker fallback for debugging...
+    echo Attempting basic launch for debugging...
     .\venv311\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 )
 

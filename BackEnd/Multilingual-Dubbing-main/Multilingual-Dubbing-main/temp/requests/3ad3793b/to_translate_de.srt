@@ -1,0 +1,12 @@
+1
+00:00:08,619 --> 00:00:09,220
+<S:SPEAKER_00|G:Female> you're listening to Hindi.
+
+2
+00:00:14,099 --> 00:00:15,199
+<S:SPEAKER_00|G:Female> Oder wie wäre es mit Deutsch?
+
+3
+00:00:15,759 --> 00:00:17,660
+<S:SPEAKER_00|G:Female> Klingt mein Deutsch authentisch?
+

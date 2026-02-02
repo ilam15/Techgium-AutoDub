@@ -22,6 +22,7 @@ class AudioProcessor:
     @staticmethod
     def extract_to_numpy(input_path: str):
         try:
-            return MediaEngine.extract_audio_numpy(input_path)
+            # CRITICAL: Use pure audio extraction to avoid bias from English captions in AI videos
+            return MediaEngine.extract_pure_audio_numpy(input_path)
         except Exception as e:
             raise MediaError(f"Failed to extract audio to numpy: {e}")
