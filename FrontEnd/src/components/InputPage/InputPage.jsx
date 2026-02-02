@@ -17,7 +17,15 @@ const InputPage = () => {
     const [showTargetDropdown, setShowTargetDropdown] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({});
 
+    // YouTube-specific state
+    const [youtubeVideoInfo, setYoutubeVideoInfo] = useState(null);
+    const [selectedQuality, setSelectedQuality] = useState(null);
+    const [downloadedVideoPath, setDownloadedVideoPath] = useState(null);
+    const [isDownloading, setIsDownloading] = useState(false);
+    const [downloadProgress, setDownloadProgress] = useState(0);
+
     // New Options State
+
     const [recoverBackgroundNoise, setRecoverBackgroundNoise] = useState(false);
     const [makeVideo, setMakeVideo] = useState(false);
 
@@ -204,46 +212,110 @@ const InputPage = () => {
     }, []);
 
 
-    // URL processing
-    const processUrl = () => {
+    // URL processing - Fetch YouTube video info
+    const processUrl = async () => {
         if (!videoUrl) return;
 
         // Validate URL
-        const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|vimeo\.com|bilibili\.com)\/.+/i;
+        const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|bilibili\.com)\/.+/i;
         if (!urlPattern.test(videoUrl)) {
             setErrors(prev => ({ ...prev, url: 'Please enter a valid YouTube, Vimeo, or Bilibili URL' }));
             return;
         }
         setErrors(prev => ({ ...prev, url: null }));
 
-        // Simulate video analysis
+        // Fetch video information from backend
         setIsProcessing(true);
         setProcessingProgress(0);
 
-        const progressInterval = setInterval(() => {
-            setProcessingProgress(prev => {
-                if (prev >= 100) {
-                    clearInterval(progressInterval);
-                    setIsProcessing(false);
-
-                    // Set mock video data
-                    setUploadedVideo({
-                        name: 'Video from URL',
-                        size: '15.3 MB',
-                        type: 'video/mp4',
-                        thumbnail: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?auto=format&fit=crop&w=100&q=80',
-                        duration: '5 mins',
-                        confidence: '98.2%',
-                        lang: 'EN-US',
-                        source: 'url'
-                    });
-
-                    return 100;
-                }
-                return prev + 10;
+        try {
+            const response = await fetch('http://localhost:8000/youtube/info', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: videoUrl }),
             });
-        }, 200);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to fetch video info');
+            }
+
+            const data = await response.json();
+            setYoutubeVideoInfo(data.data);
+            setProcessingProgress(100);
+            setIsProcessing(false);
+
+            console.log('YouTube video info:', data.data);
+
+        } catch (error) {
+            console.error(error);
+            setIsProcessing(false);
+            setErrors(prev => ({ ...prev, url: error.message }));
+            alert(`Error: ${error.message}`);
+        }
     };
+
+    // Download YouTube video with selected quality
+    const downloadYoutubeVideo = async (quality) => {
+        if (!videoUrl || !quality) return;
+
+        setIsDownloading(true);
+        setDownloadProgress(0);
+        setSelectedQuality(quality);
+
+        try {
+            // Simulate download progress
+            const progressInterval = setInterval(() => {
+                setDownloadProgress(prev => {
+                    if (prev >= 90) return prev;
+                    return prev + 10;
+                });
+            }, 500);
+
+            const response = await fetch('http://localhost:8000/youtube/download', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: videoUrl, quality }),
+            });
+
+            clearInterval(progressInterval);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Download failed');
+            }
+
+            const data = await response.json();
+            setDownloadProgress(100);
+            setDownloadedVideoPath(data.file_path);
+
+            // Set uploaded video info for display
+            setUploadedVideo({
+                name: data.filename,
+                size: data.size,
+                type: 'video/mp4',
+                thumbnail: youtubeVideoInfo.thumbnail,
+                duration: Math.round(youtubeVideoInfo.duration / 60) + ' mins',
+                confidence: '98.2%',
+                lang: 'EN-US',
+                source: 'youtube'
+            });
+
+            setIsDownloading(false);
+            console.log('Downloaded video path:', data.file_path);
+
+        } catch (error) {
+            console.error(error);
+            setIsDownloading(false);
+            setDownloadProgress(0);
+            alert(`Download Error: ${error.message}`);
+        }
+    };
+
 
     // Generate video handler
     const handleGenerateVideo = async () => {
@@ -270,10 +342,14 @@ const InputPage = () => {
 
         try {
             const formData = new FormData();
+
+            // Add file or YouTube video path
             if (rawFile) {
                 formData.append('file', rawFile);
+            } else if (downloadedVideoPath) {
+                // Use YouTube downloaded video
+                formData.append('youtube_video_path', downloadedVideoPath);
             }
-            // else if (videoUrl) { ... handle URL case ... } // Priority on file upload as per user mock
 
             // Helper to get full language name if needed, or code. 
             // The backend likely expects full English names based on app.py
@@ -287,6 +363,7 @@ const InputPage = () => {
             formData.append('gender', speakerGender || 'Male');
             formData.append('recover_background_noise', recoverBackgroundNoise);
             formData.append('make_video', true); // Force True as we want a video output
+
 
             // Progress simulation (since fetch doesn't give upload progress easily without XHR/axios)
             const progressInterval = setInterval(() => {
@@ -345,7 +422,12 @@ const InputPage = () => {
         setUploadedVideo(null);
         setVideoUrl('');
         setUploadProgress({});
+        setYoutubeVideoInfo(null);
+        setSelectedQuality(null);
+        setDownloadedVideoPath(null);
+        setDownloadProgress(0);
     };
+
 
     // Get language name by code
     const getLanguageName = (code) => {
@@ -518,6 +600,65 @@ const InputPage = () => {
                         </div>
                         {errors.url && <p className="text-red-500 text-xs font-semibold mt-2 ml-1">{errors.url}</p>}
                         {errors.source && !videoUrl && !uploadedVideo && <p className="text-red-500 text-xs font-semibold mt-2 ml-1">{errors.source}</p>}
+
+                        {/* YouTube Video Info & Quality Selector */}
+                        {youtubeVideoInfo && !uploadedVideo && (
+                            <div className="mt-6 bg-white border border-slate-200 rounded-xl p-4 animate-fade-in">
+                                {/* Video Preview */}
+                                <div className="flex items-start gap-3 mb-4 pb-4 border-b border-slate-100">
+                                    <div className="w-24 h-16 bg-slate-200 rounded-md overflow-hidden flex-shrink-0">
+                                        <img src={youtubeVideoInfo.thumbnail} alt="Video thumbnail" className="w-full h-full object-cover" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-semibold text-slate-900 truncate mb-1">{youtubeVideoInfo.title}</div>
+                                        <div className="text-xs text-slate-600">
+                                            {Math.round(youtubeVideoInfo.duration / 60)} mins • {youtubeVideoInfo.uploader}
+                                        </div>
+                                        {isDownloading && (
+                                            <div className="mt-2">
+                                                <div className="flex items-center gap-2 text-xs text-blue-600 mb-1">
+                                                    <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                                                    <span>Downloading {selectedQuality}... {downloadProgress}%</span>
+                                                </div>
+                                                <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                                                    <div className="h-full bg-blue-600 transition-all duration-300" style={{ width: `${downloadProgress}%` }}></div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Quality Options */}
+                                {!isDownloading && !downloadedVideoPath && (
+                                    <div>
+                                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3">Download Quality:</h4>
+                                        <div className="grid grid-cols-4 gap-2">
+                                            {youtubeVideoInfo.formats
+                                                .filter(fmt => fmt.available !== false)
+                                                .map((format) => (
+                                                    <button
+                                                        key={format.quality}
+                                                        onClick={() => downloadYoutubeVideo(format.quality)}
+                                                        className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-slate-200 bg-white hover:border-blue-500 hover:bg-blue-50 hover:text-blue-600 transition-all duration-200 hover:scale-105"
+                                                    >
+                                                        {format.quality}
+                                                    </button>
+                                                ))}
+                                        </div>
+                                        <p className="text-[10px] text-slate-500 mt-3 text-center">Select a quality to download the video</p>
+                                    </div>
+                                )}
+
+                                {downloadedVideoPath && (
+                                    <div className="flex items-center justify-center gap-2 text-green-600 text-sm font-semibold">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                        </svg>
+                                        <span>Video downloaded successfully!</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Uploaded Video Card */}

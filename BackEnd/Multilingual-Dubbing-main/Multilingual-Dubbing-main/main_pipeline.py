@@ -6,8 +6,10 @@ from typing import Dict, Any, Optional
 from collections import Counter
 from pydub import AudioSegment
 import numpy as np
-import fasttext
-
+try:
+    import fasttext
+except ImportError:
+    fasttext=None
 from core.context import RequestContext
 from core.config import settings
 from core.logger import logger
@@ -130,7 +132,7 @@ class ProductionPipeline:
             
             # Load fastText model
             fasttext_model = None
-            if fasttext_model_path and os.path.exists(fasttext_model_path):
+            if fasttext and fasttext_model_path and os.path.exists(fasttext_model_path):
                 try:
                     fasttext_model = fasttext.load_model(fasttext_model_path)
                     logger.info("✅ fastText LID model ready")

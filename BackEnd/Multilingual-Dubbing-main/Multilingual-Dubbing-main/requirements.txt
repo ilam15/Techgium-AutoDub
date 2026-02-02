@@ -28,3 +28,4 @@ phonemizer
 loguru
 fasttext-wheel
 langid
+yt-dlp

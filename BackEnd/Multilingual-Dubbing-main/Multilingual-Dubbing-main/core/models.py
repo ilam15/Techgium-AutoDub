@@ -63,6 +63,10 @@ class ModelManager:
             self._last_used["diarization"] = time.time()
             return self._models["diarization"]
 
+    def get_analyzer(self, hf_token: str = None) -> SpeakerAnalyzer:
+        """Alias for get_diarization to maintain compatibility with API calls."""
+        return self.get_diarization(hf_token)
+
     def get_translator(self):
         from transformers import pipeline
         with self._lock:

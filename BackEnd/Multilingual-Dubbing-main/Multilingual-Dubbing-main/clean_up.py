@@ -188,7 +188,8 @@ def cleanup_all_temporary_files(keep_latest_output: bool = True, preserve_files:
         'subtitle_audio',
         'TTS_DUB',
         'temp',
-        'dummy',
+        'temp_downloads',
+        'dummy', 
         'generated_subtitle'
     ]
     
