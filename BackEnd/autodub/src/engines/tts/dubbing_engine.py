@@ -86,23 +86,26 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
             
             # If difference is > 50ms, we must stretch to ensure perfect lipsync
             if abs(current_dur_ms - target_dur_ms) > 50:
-                logger.info(f"⏳ Precision stretching: {current_dur_ms}ms -> {target_dur_ms}ms for segment lip-sync")
                 stretch_factor = current_dur_ms / target_dur_ms
+                logger.info(f"⏳ Sync needed: {current_dur_ms}ms -> {target_dur_ms}ms (Raw factor: {stretch_factor:.2f}x)")
+                
+                # Point 7: Cap Time-Stretch Ratio
+                if stretch_factor > settings.TTS_SPEED_CAP:
+                    logger.warning(f"Capping speedup: {stretch_factor:.2f}x -> {settings.TTS_SPEED_CAP}x (Max Limit)")
+                    stretch_factor = settings.TTS_SPEED_CAP
+                elif stretch_factor < settings.TTS_SLOW_DOWN_CAP:
+                     logger.warning(f"Capping slowdown: {stretch_factor:.2f}x -> {settings.TTS_SLOW_DOWN_CAP}x (Min Limit)")
+                     stretch_factor = settings.TTS_SLOW_DOWN_CAP
                 
                 # Use FFmpeg atempo for high-quality time stretching without pitch shift
                 stretched_path = tts_path.replace(".wav", "_stretched.wav")
-                # atempo filter supports 0.5 to 2.0. If outside, we chain them.
-                if stretch_factor < 0.5:
-                    atempo = "atempo=0.5,atempo=" + str(stretch_factor/0.5)
-                elif stretch_factor > 2.0:
-                    atempo = "atempo=2.0,atempo=" + str(stretch_factor/2.0)
-                else:
-                    atempo = f"atempo={stretch_factor}"
+                atempo = f"atempo={stretch_factor}"
                 
                 cmd = [
                     MediaEngine.FFMPEG_PATH, "-y", "-i", tts_path,
                     "-filter:a", atempo,
                     "-ar", "44100",
+                    "-loglevel", "error", # Quieter logging
                     stretched_path
                 ]
                 subprocess.run(cmd, capture_output=True, check=True)
@@ -211,17 +214,16 @@ class SRTDubbing:
 
             speed_factor = tts_duration / actual_duration
             
-            # Smart Speed Limits
-            # Don't speed up more than 1.3x (unintelligible)
-            # Don't slow down more than 0.85x (unnatural)
+            # Smart Speed Limits (Points 7 & 10 from Config)
+            # Don't speed up more than limit (unintelligible)
+            # Don't slow down more than limit (unnatural)
             
             final_path = audio_path
             
-            if speed_factor > 1.3:
-                # Audio is way too long. Cap at 1.3x and let it overflow slightly
-                # (Better to have slight sync offset than unintelligible speech)
-                logger.info(f"Limiting speedup: {speed_factor:.2f}x -> 1.3x for '{text[:15]}...'")
-                speedup_factor = 1.3
+            if speed_factor > settings.TTS_SPEED_CAP:
+                # Audio is way too long. Cap at LIMIT and let it overflow slightly
+                logger.info(f"Limiting speedup: {speed_factor:.2f}x -> {settings.TTS_SPEED_CAP}x for '{text[:15]}...'")
+                speedup_factor = settings.TTS_SPEED_CAP
                 
                 unique_id = uuid.uuid4().hex
                 speedup_filename = os.path.join(settings.TEMP_DIR, f"speedup_{unique_id}.wav")
@@ -235,7 +237,7 @@ class SRTDubbing:
                 
                 shutil.move(speedup_filename, audio_path)
                 
-            elif 1.0 < speed_factor <= 1.3:
+            elif 1.0 < speed_factor <= settings.TTS_SPEED_CAP:
                 # Moderate speedup needed - do exact fit
                 unique_id = uuid.uuid4().hex
                 speedup_filename = os.path.join(settings.TEMP_DIR, f"speedup_{unique_id}.wav")
@@ -249,7 +251,7 @@ class SRTDubbing:
                 
                 shutil.move(speedup_filename, audio_path)
                 
-            elif speed_factor < 0.85:
+            elif speed_factor < settings.TTS_SLOW_DOWN_CAP:
                 # Audio is too short. Don't stretch it to fill (monster voice).
                 # Instead, center it or just pad with silence.
                 logger.info(f"Avoiding slow-down: {speed_factor:.2f}x. Padding with silence instead.")
@@ -265,7 +267,7 @@ class SRTDubbing:
                 new_audio.export(audio_path, format="wav")
                 
             else:
-                # speed_factor between 0.85 and 1.0 (slightly short)
+                # speed_factor between LOW_CAP and 1.0 (slightly short)
                 # Pad end with silence
                 silence_gap = actual_duration - tts_duration
                 silence = AudioSegment.silent(duration=int(silence_gap), frame_rate=24000)

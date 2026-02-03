@@ -26,6 +26,17 @@ class YouTubeDownloader:
         """
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
+        
+        # Point 8: yt-dlp Stability Check
+        try:
+            from yt_dlp import version
+            current_version = version.__version__
+            logger.info(f"yt-dlp version: {current_version}")
+            # Simple check: warn if version is older than 2024.
+            if int(current_version.split('.')[0]) < 2024:
+                 logger.warning(f"yt-dlp version {current_version} is old! Please upgrade to avoid PO Token errors.")
+        except Exception:
+             logger.warning("Could not verify yt-dlp version.")
     
     def get_video_info(self, url: str) -> Dict:
         """

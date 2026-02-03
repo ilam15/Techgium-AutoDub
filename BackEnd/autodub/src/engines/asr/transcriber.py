@@ -35,7 +35,17 @@ class ASRTranscriber:
                 # 2. For EVERY segment found, we perform a dedicated audio-only 
                 #    language detection pass on that specific segment's audio.
                 
-                chunk_duration = 10 # seconds (Increased frequency of resets)
+                from src.core.config import settings
+                
+                # Dynamic Probe Window logic (Point 6)
+                duration_sec = len(audio_data) / 16000
+                if duration_sec < 60:
+                     chunk_duration = settings.PROBE_WINDOW_SHORT
+                     logger.info(f"Video < 60s ({duration_sec:.1f}s): Using short probing window ({chunk_duration}s)")
+                else:
+                     chunk_duration = settings.PROBE_WINDOW_LONG
+                     logger.info(f"Video >= 60s ({duration_sec:.1f}s): Using standard probing window ({chunk_duration}s)")
+
                 chunk_samples = chunk_duration * 16000
                 total_samples = len(audio_data)
                 

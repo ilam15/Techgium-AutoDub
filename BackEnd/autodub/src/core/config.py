@@ -14,8 +14,16 @@ class Settings(BaseSettings):
     # ML Model Settings
     # DEVICE checks actual availability
     DEVICE: str = "cuda" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "cpu"
-    WHISPER_MODEL_NAME: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
     
+    # Point 3: Whisper Optimization & Configuration
+    WHISPER_MODEL_SIZE: str = "medium" # Options: small, medium, large-v3
+    @property
+    def WHISPER_MODEL_NAME(self) -> str:
+        # Map size to specific model names if needed, or use directly
+        if self.WHISPER_MODEL_SIZE == "large-v3":
+            return "deepdml/faster-whisper-large-v3-turbo-ct2"
+        return self.WHISPER_MODEL_SIZE
+
     # Use int8 on CPU to avoid float16 errors
     COMPUTE_TYPE: str = "float16" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "int8"
     HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
@@ -24,6 +32,14 @@ class Settings(BaseSettings):
     # API Limits
     MAX_FILE_SIZE: int = 500 * 1024 * 1024 # 500MB
     MAX_VIDEO_DURATION: int = 3600 # 1 hour
+    
+    # Point 7 & 10: TTS & Audio Settings
+    TTS_SPEED_CAP: float = 1.4      # Max speedup ratio
+    TTS_SLOW_DOWN_CAP: float = 0.85 # Min speed ratio
+    
+    # Point 6: Probing Settings
+    PROBE_WINDOW_SHORT: int = 5     # For duration < 60s
+    PROBE_WINDOW_LONG: int = 10     # For duration >= 60s
     
     # TTS Settings
     DEFAULT_TTS: str = "Kokoro TTS"

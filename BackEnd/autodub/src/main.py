@@ -1,18 +1,73 @@
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import shutil
+import sys
+import time
+import os
+import subprocess
+import threading
 
 from src.core.config import settings
 from src.core.logger import logger
 from src.api.routes import router as pipeline_router
 
-import time
-import os
-import shutil
-import subprocess
-import threading
+# ======================================================
+#                    LIFESPAN & STARTUP
+# ======================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. FFmpeg Detection (Point 1)
+    if not shutil.which("ffmpeg"):
+        logger.critical("FFmpeg not found! Please install FFmpeg and add it to your PATH.")
+        sys.exit(1)
+    
+    logger.info("FFmpeg check passed.")
 
-app = FastAPI(title=settings.APP_NAME)
+    # 2. Model Warmup (Point 2)
+    logger.info("Starting model warmup...")
+    try:
+        from src.app import model_manager
+
+        def load_models():
+            try:
+                logger.info(f"Loading Whisper ({settings.WHISPER_MODEL_SIZE})...")
+                model_manager.get_whisper()
+                logger.info("Whisper ready")
+            except Exception as e:
+                logger.error(f"Whisper warmup failed: {e}")
+
+            try:
+                logger.info("Loading Speaker Analyzer...")
+                model_manager.get_analyzer()
+                logger.info("Speaker Analyzer ready")
+            except Exception as e:
+                logger.error(f"Analyzer warmup failed: {e}")
+                
+            try:
+                 # Point 5: NLLB Pre-load
+                 logger.info("Pre-loading Translation Engine...")
+                 model_manager.get_translator()
+                 logger.info("Translation Engine ready")
+            except Exception as e:
+                 logger.error(f"Translation warmup failed: {e}")
+
+        threading.Thread(target=load_models, daemon=True).start()
+        logger.info("Model warmup started in background")
+
+    except Exception as e:
+        logger.error(f"Warmup init failed: {e}")
+        
+    yield
+    
+    # Shutdown logic
+    logger.info("Shutting down...")
+
+# ======================================================
+#                    MAIN APP
+# ======================================================
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 # ---------------- CORS ----------------
 app.add_middleware(
@@ -27,43 +82,12 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 # ======================================================
-#                    STARTUP WARMUP
-# ======================================================
-@app.on_event("startup")
-async def warmup_models():
-    logger.info("Starting model warmup...")
-    try:
-        from src.app import model_manager
-
-        def load_models():
-            try:
-                logger.info("Loading Whisper...")
-                model_manager.get_whisper()
-                logger.info("Whisper ready")
-            except Exception as e:
-                logger.error(f"Whisper warmup failed: {e}")
-
-            try:
-                logger.info("Loading Speaker Analyzer...")
-                model_manager.get_analyzer()
-                logger.info("Speaker Analyzer ready")
-            except Exception as e:
-                logger.error(f"Analyzer warmup failed: {e}")
-
-        threading.Thread(target=load_models, daemon=True).start()
-        logger.info("Model warmup started in background")
-
-    except Exception as e:
-        logger.error(f"Warmup init failed: {e}")
-
-# ======================================================
 #                    HEALTH ENDPOINTS
 # ======================================================
 
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": settings.APP_NAME}
-
 
 @app.get("/ready")
 def readiness():
@@ -72,7 +96,6 @@ def readiness():
         return {"status": "ready"}
     except:
         return {"status": "not_ready"}
-
 
 @app.get("/warmup")
 def manual_warmup():
@@ -83,7 +106,6 @@ def manual_warmup():
         return {"status": "warmed"}
     except Exception as e:
         return {"status": "failed", "error": str(e)}
-
 
 @app.get("/health/deep")
 def deep_health():
