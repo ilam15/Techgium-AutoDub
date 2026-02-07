@@ -180,6 +180,3 @@ Techgium-AutoDub/
 2.  **Torch/CUDA Errors**: If you lack a GPU, ensure you install the CPU-only versions of torch or configure `settings.DEVICE = "cpu"`.
 3.  **Model Download**: On first run, models (Whisper, NLLB) will be downloaded to `~/.cache/huggingface`. Ensure you have a stable internet connection.
 
----
-
-**Developed for Techgium**
