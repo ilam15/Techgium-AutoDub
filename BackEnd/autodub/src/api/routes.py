@@ -1,18 +1,24 @@
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, BackgroundTasks
+from pydantic import BaseModel
+from typing import Optional, List
 import os
 import uuid
+import json
+import torch
 import shutil
 import asyncio
-import json
 
 from src.core.config import settings
 from src.core.logger import logger
 from src.main_pipeline import ProductionPipeline
 from src.utils.clean_up import cleanup_all_temporary_files
-from src.services.youtube_downloader import YouTubeDownloader
 from src.utils.media_engine import MediaEngine
-from pydantic import BaseModel
+from src.services.youtube_downloader import YouTubeDownloader
+from src.tasks import trigger_autodub_pipeline
+from src.core.celery_app import celery_app
+from celery.result import AsyncResult
+
+from src.core.context import RequestContext
 
 router = APIRouter()
 
@@ -24,12 +30,18 @@ class YouTubeInfoRequest(BaseModel):
 
 class YouTubeDownloadRequest(BaseModel):
     url: str
-    quality: str = "720p"
+    quality: str
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    progress: Optional[float] = 0
+    result: Optional[dict] = None
+    error: Optional[str] = None
 
 # ---------------- Concurrency Controls ----------------
-_active_requests = asyncio.Semaphore(3)
-_request_timeout = 600
-_max_video_duration = 600
+_active_requests = asyncio.Semaphore(10) # Increased for async
+_max_video_duration = 3600 # 1 hour
 
 # ======================================================
 #                    DUB VIDEO
@@ -48,98 +60,85 @@ async def dub_video(
     user_known_languages: str = Form("[]"),
     hf_token: str = Form(None)
 ):
-    if _active_requests.locked():
-        raise HTTPException(status_code=429, detail="Server busy. Try later.")
+    try:
+        trace_id = str(uuid.uuid4())[:8]
+        context = RequestContext(trace_id)
 
-    async with _active_requests:
+        # ---------- Parse Languages ----------
         try:
-            trace_id = str(uuid.uuid4())[:8]
-            pipeline = ProductionPipeline(trace_id=trace_id)
+            known_langs = json.loads(user_known_languages)
+        except:
+            known_langs = []
 
-            # ---------- Parse Languages ----------
+        # ---------- Input Source ----------
+        if youtube_url:
             try:
-                known_langs = json.loads(user_known_languages)
-            except:
-                known_langs = []
-
-            # ---------- Input Source ----------
-            if youtube_url:
-                try:
-                    logger.info(f"Downloading YouTube video: {youtube_url} (Trace: {trace_id})")
-                    # Download directly to temp folder with trace_id to avoid collisions
-                    dl_filename = f"yt_{trace_id}.mp4"
-                    local_input = youtube_dl.download_video(youtube_url, filename=dl_filename)
-                    logger.info(f"YouTube download complete: {local_input}")
-                except Exception as e:
-                    logger.error(f"YouTube download failed: {e}")
-                    raise HTTPException(status_code=400, detail=f"YouTube download failed: {str(e)}")
-
-            elif youtube_video_path:
-                if not os.path.exists(youtube_video_path):
-                    raise HTTPException(status_code=400, detail="YouTube file not found")
-                local_input = youtube_video_path
-                logger.info(f"YouTube local file job: {trace_id}")
-
-            elif file:
-                if file.size > settings.MAX_FILE_SIZE:
-                    raise HTTPException(status_code=400, detail="File too large")
-
-                local_input = pipeline.context.get_path(file.filename)
-                with open(local_input, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-
-                logger.info(f"Upload job: {trace_id} | {file.filename}")
-
-            else:
-                raise HTTPException(status_code=400, detail="Provide file or youtube_video_path")
-
-            # ---------- Duration Check ----------
-            try:
-                probe = MediaEngine.get_probe_info(local_input)
-                duration = float(probe.get("format", {}).get("duration", 0))
-                if duration > _max_video_duration:
-                    raise HTTPException(status_code=413, detail="Video too long")
-            except HTTPException:
-                raise
+                logger.info(f"Downloading YouTube video: {youtube_url} (Trace: {trace_id})")
+                dl_filename = f"yt_{trace_id}.mp4"
+                local_input = youtube_dl.download_video(youtube_url, filename=dl_filename)
+                logger.info(f"YouTube download complete: {local_input}")
             except Exception as e:
-                logger.warning(f"Duration check skipped: {e}")
+                logger.error(f"YouTube download failed: {e}")
+                raise HTTPException(status_code=400, detail=f"YouTube download failed: {str(e)}")
 
-            # ---------- Run Pipeline ----------
-            try:
-                result = await asyncio.wait_for(
-                    run_in_threadpool(
-                        pipeline.run,
-                        input_file=local_input,
-                        src_lang=source_lang,
-                        dst_lang=target_lang,
-                        gender=gender,
-                        recover_music=recover_bg,
-                        user_known_languages=known_langs
-                    ),
-                    timeout=_request_timeout
-                )
-            except asyncio.TimeoutError:
-                raise HTTPException(status_code=408, detail="Processing timeout")
+        elif youtube_video_path:
+            if not os.path.exists(youtube_video_path):
+                raise HTTPException(status_code=400, detail="YouTube file not found")
+            local_input = youtube_video_path
+            logger.info(f"YouTube local file job: {trace_id}")
 
-            if result.get("status") == "error":
-                return result
+        elif file:
+            # Check for empty file
+            if file.filename == "":
+                raise HTTPException(status_code=400, detail="No file uploaded")
+                
+            local_input = context.get_path(file.filename)
+            with open(local_input, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-            # ---------- Cleanup ----------
-            background_tasks.add_task(cleanup_all_temporary_files, keep_latest_output=True)
+            logger.info(f"Upload job: {trace_id} | {file.filename}")
 
-            base_url = f"{request.url.scheme}://{request.url.netloc}"
-            return {
-                "status": "success",
-                "request_id": trace_id,
-                "video_url": f"{base_url}/static/{result['video_url']}",
-                "metrics": result["metrics"]
-            }
+        else:
+            raise HTTPException(status_code=400, detail="Provide file or youtube_video_path")
 
+        # ---------- Duration Check ----------
+        try:
+            probe = MediaEngine.get_probe_info(local_input)
+            duration = float(probe.get("format", {}).get("duration", 0))
+            if duration > _max_video_duration:
+                raise HTTPException(status_code=413, detail="Video too long")
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"API Error: {e}")
-            return {"status": "error", "error": str(e)}
+            logger.warning(f"Duration check skipped: {e}")
+
+        # ---------- Run Pipeline (Celery Async) ----------
+        try:
+            task_id = trigger_autodub_pipeline(
+                input_file=local_input,
+                src_lang=source_lang,
+                dst_lang=target_lang,
+                gender=gender,
+                recover_bg=recover_bg,
+                user_known_languages=known_langs,
+                trace_id=trace_id
+            )
+            
+            return {
+                "status": "queued",
+                "task_id": task_id,
+                "request_id": trace_id,
+                "message": "Video dubbing pipeline started in background."
+            }
+        except Exception as e:
+            logger.error(f"Failed to start Celery pipeline: {e}")
+            raise HTTPException(status_code=500, detail="Failed to start processing pipeline.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API Error: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 # ======================================================
@@ -170,3 +169,45 @@ async def download_youtube_video(request: YouTubeDownloadRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+@router.get("/task/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(task_id: str):
+    """
+    Check the status of a Celery task.
+    """
+    try:
+        result = AsyncResult(task_id, app=celery_app)
+        
+        response = {
+            "task_id": task_id,
+            "status": result.status,
+            "progress": 0,
+            "stage": "Queued",
+            "result": None,
+            "error": None
+        }
+
+        # Check for progress updates (custom state 'PROGRESS')
+        if result.status == 'PROGRESS':
+            response["progress"] = result.info.get('progress', 0)
+            response["stage"] = result.info.get('stage', 'Processing')
+        elif result.status == 'SUCCESS':
+            response["progress"] = 100
+            response["stage"] = "Completed"
+            response["result"] = result.result
+            
+            # Prepend /static/ to urls
+            if response["result"]:
+                for key in ["video_url", "original_video_url"]:
+                    if key in response["result"]:
+                        fn = response["result"][key]
+                        if fn and not fn.startswith(("http", "/")):
+                             response["result"][key] = f"/static/{fn}"
+        elif result.status == 'FAILURE':
+            response["status"] = "FAILED"
+            response["error"] = str(result.info)
+            response["stage"] = "Error"
+        
+        return response
+    except Exception as e:
+        logger.error(f"Error checking task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

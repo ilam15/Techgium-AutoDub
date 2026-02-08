@@ -35,11 +35,16 @@ class ModelManager:
         with self._lock:
             if "whisper" not in self._models:
                 try:
-                    logger.info(f"Initializing Whisper Model [{settings.DEVICE}]: {settings.WHISPER_MODEL_NAME}")
+                    import multiprocessing
+                    num_cores = multiprocessing.cpu_count()
+                    threads = min(num_cores, 8) if settings.DEVICE == "cpu" else 0
+                    
+                    logger.info(f"Initializing Whisper Model [{settings.DEVICE}]: {settings.WHISPER_MODEL_NAME} (Threads: {threads})")
                     self._models["whisper"] = WhisperModel(
                         settings.WHISPER_MODEL_NAME, 
                         device=settings.DEVICE, 
-                        compute_type=settings.COMPUTE_TYPE
+                        compute_type=settings.COMPUTE_TYPE,
+                        cpu_threads=threads
                     )
                 except Exception as e:
                     error_msg = str(e).lower()
@@ -48,7 +53,8 @@ class ModelManager:
                         self._models["whisper"] = WhisperModel(
                             settings.WHISPER_MODEL_NAME, 
                             device="cpu", 
-                            compute_type="int8"
+                            compute_type="int8",
+                            cpu_threads=4  # Safe fallback
                         )
                     else:
                         raise e
@@ -68,15 +74,22 @@ class ModelManager:
         return self.get_diarization(hf_token)
 
     def get_translator(self):
-        from transformers import pipeline
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
         with self._lock:
             if "translator" not in self._models:
                 device_idx = 0 if settings.DEVICE == "cuda" and torch.cuda.is_available() else -1
                 try:
+                    model_id = "facebook/nllb-200-distilled-600M"
                     logger.info(f"Initializing NLLB-200 Translation Model [Device:{device_idx}]...")
+                    
+                    # More robust loading for NLLB many-to-many model
+                    tokenizer = AutoTokenizer.from_pretrained(model_id)
+                    model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+                    
                     self._models["translator"] = pipeline(
                         "translation",
-                        model="facebook/nllb-200-distilled-600M",
+                        model=model,
+                        tokenizer=tokenizer,
                         device=device_idx
                     )
                 except Exception as e:

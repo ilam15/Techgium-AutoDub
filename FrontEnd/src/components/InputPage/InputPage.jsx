@@ -214,7 +214,7 @@ const InputPage = () => {
 
     // URL processing - Fetch YouTube video info
     const processUrl = async () => {
-        if (!videoUrl) return;
+        if (!videoUrl || isProcessing) return;
 
         // Validate URL
         const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|bilibili\.com)\/.+/i;
@@ -259,7 +259,7 @@ const InputPage = () => {
 
     // Download YouTube video with selected quality
     const downloadYoutubeVideo = async (quality) => {
-        if (!videoUrl || !quality) return;
+        if (!videoUrl || !quality || isDownloading) return;
 
         setIsDownloading(true);
         setDownloadProgress(0);
@@ -319,6 +319,8 @@ const InputPage = () => {
 
     // Generate video handler
     const handleGenerateVideo = async () => {
+        if (isProcessing) return;
+
         let newErrors = {};
 
         if (!uploadedVideo && !videoUrl) {
@@ -361,17 +363,17 @@ const InputPage = () => {
             formData.append('source_lang', sourceLanguage === 'auto' || !sourceLanguage ? 'Automatic' : getLangName(sourceLanguage));
             formData.append('target_lang', getLangName(targetLanguage));
             formData.append('gender', speakerGender || 'Male');
-            formData.append('recover_background_noise', recoverBackgroundNoise);
-            formData.append('make_video', true); // Force True as we want a video output
+            formData.append('recover_bg', recoverBackgroundNoise);
+            formData.append('user_known_languages', "[]");
 
 
-            // Progress simulation (since fetch doesn't give upload progress easily without XHR/axios)
+            // Progress simulation (Initial Upload)
             const progressInterval = setInterval(() => {
                 setProcessingProgress(prev => {
                     if (prev >= 90) return prev;
-                    return prev + 5;
+                    return prev + 2;
                 });
-            }, 500);
+            }, 800);
 
             const response = await fetch('http://localhost:8000/dub_video', {
                 method: 'POST',
@@ -379,7 +381,6 @@ const InputPage = () => {
             });
 
             clearInterval(progressInterval);
-            setProcessingProgress(100);
 
             if (!response.ok) {
                 const errorData = await response.json();
@@ -387,23 +388,53 @@ const InputPage = () => {
             }
 
             const data = await response.json();
-            setIsProcessing(false);
 
-            // Navigate to preview page with video data
-            navigate('/preview', {
-                state: {
-                    videoUrl: data.video_url,
-                    originalVideoUrl: data.original_video_url,
-                    language: targetLanguage,
-                    gender: speakerGender,
-                    metadata: {
-                        originalLanguage: getLangName(sourceLanguage) || "Detected",
-                        dubbedLanguage: getLangName(targetLanguage),
-                        duration: uploadedVideo?.duration || "Unknown",
-                        status: "Synced Successfully"
+            if (data.status === 'queued') {
+                // Start polling for real results
+                const taskId = data.task_id;
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const statusRes = await fetch(`http://localhost:8000/task/${taskId}`);
+                        if (!statusRes.ok) return;
+                        const statusData = await statusRes.json();
+
+                        if (statusData.status === 'SUCCESS') {
+                            clearInterval(pollInterval);
+                            setProcessingProgress(100);
+                            setIsProcessing(false);
+
+                            const result = statusData.result;
+                            // Navigate to preview page with REAL video data
+                            navigate('/preview', {
+                                state: {
+                                    videoUrl: `http://localhost:8000${result.video_url}`,
+                                    originalVideoUrl: `http://localhost:8000${result.original_video_url}`,
+                                    language: targetLanguage,
+                                    gender: speakerGender,
+                                    metadata: {
+                                        originalLanguage: getLangName(sourceLanguage) || "Detected",
+                                        dubbedLanguage: getLangName(targetLanguage),
+                                        duration: uploadedVideo?.duration || "Unknown",
+                                        status: "Synced Successfully"
+                                    }
+                                }
+                            });
+                        } else if (statusData.status === 'FAILURE' || statusData.status === 'REVOKED') {
+                            clearInterval(pollInterval);
+                            setIsProcessing(false);
+                            alert(`Dubbing failed: ${statusData.error || 'Unknown error'}`);
+                        } else {
+                            // Still processing, update progress slowly
+                            setProcessingProgress(prev => (prev < 98 ? prev + 1 : prev));
+                        }
+                    } catch (e) {
+                        console.error("Polling error:", e);
                     }
-                }
-            });
+                }, 3000);
+            } else {
+                setIsProcessing(false);
+                throw new Error("Invalid response from server");
+            }
 
         } catch (error) {
             console.error(error);

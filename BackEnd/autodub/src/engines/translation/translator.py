@@ -11,6 +11,13 @@ class TranslationService:
         self.context = context
         self._cache = {} # In-memory cache for the session (could extend to Redis)
 
+    def translate_text(self, text: str, src_name: str, dst_name: str) -> str:
+        """Translates a single string using the batch engine."""
+        from types import SimpleNamespace
+        sub = SimpleNamespace(text=text)
+        results, _ = self.translate_batches([sub], src_name, dst_name)
+        return results[0].text
+
     def translate_batches(self, subtitles, src_name: str, dst_name: str):
         """
         Translates subtitles using the local NLLB model with exhaustive logging.

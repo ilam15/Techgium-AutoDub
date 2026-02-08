@@ -12,7 +12,34 @@ class MediaEngine:
     High-performance Media Engine for Audio-Video Processing.
     Focuses on minimum latency, zero re-encoding, and streaming pipes.
     """
-    FFMPEG_PATH = "ffmpeg" # Default, can be overridden
+    FFMPEG_PATH = "ffmpeg"
+    FFPROBE_PATH = "ffprobe"
+
+    @classmethod
+    def initialize(cls):
+        """Initializes FFmpeg paths using static-ffmpeg if needed."""
+        import shutil
+        import os
+        
+        # Try to find system ffmpeg first
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            try:
+                import static_ffmpeg
+                logger.info("system ffmpeg not found, attempting to use static-ffmpeg...")
+                static_ffmpeg.add_paths()
+            except ImportError:
+                logger.warning("static-ffmpeg not installed and system ffmpeg missing.")
+
+        # Re-check and set absolute paths
+        cls.FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
+        cls.FFPROBE_PATH = shutil.which("ffprobe") or "ffprobe"
+        
+        if shutil.which(cls.FFMPEG_PATH):
+            logger.info(f"FFmpeg path resolved: {cls.FFMPEG_PATH}")
+        else:
+            logger.error("FFmpeg could not be resolved by system or static-ffmpeg!")
+
+
 
     @classmethod
     def set_ffmpeg_path(cls, path: str):
@@ -288,12 +315,12 @@ class MediaEngine:
             raise RuntimeError(f"Complex merge with ducking failed: {result.stderr}")
         return output_path
 
-    @staticmethod
-    def get_probe_info(file_path: str) -> dict:
+    @classmethod
+    def get_probe_info(cls, file_path: str) -> dict:
         """Helper to get media info using ffprobe."""
         import json
         command = [
-            "ffprobe",
+            cls.FFPROBE_PATH,
             "-v", "quiet",
             "-print_format", "json",
             "-show_format",
@@ -302,3 +329,6 @@ class MediaEngine:
         ]
         result = subprocess.run(command, capture_output=True, text=True)
         return json.loads(result.stdout)
+
+# Auto-initialize FFmpeg paths
+MediaEngine.initialize()

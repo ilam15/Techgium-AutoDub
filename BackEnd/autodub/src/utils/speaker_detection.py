@@ -12,11 +12,9 @@ load_dotenv()
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*torchcodec.*")
 
-from transformers import pipeline
+# from transformers import pipeline (Moved inside class for robustness)
 from pyannote.audio import Pipeline
 import json
-from static_ffmpeg import add_paths
-add_paths()
 
 class SpeakerAnalyzer:
     def __init__(self, hf_token=None):
@@ -28,39 +26,63 @@ class SpeakerAnalyzer:
         self.load_models()
         
     def load_models(self):
+        # Diagnostic logging (Safe)
         if self.hf_token:
-            try:
-                # Using speaker-diarization@2.1 - stable version without community model dependency
-                # This version works reliably with just the main model access
-                self.diarization_pipeline = Pipeline.from_pretrained(
-                    "pyannote/speaker-diarization@2.1",
-                    token=self.hf_token
-                )
-                if self.device == 0:
-                    self.diarization_pipeline.to(torch.device("cuda"))
-                print("✅ Pyannote speaker diarization loaded successfully.")
-                print("   Using speaker-diarization@2.1 (stable)")
-            except Exception as e:
-                # If 2.1 fails, try the latest 3.1
+            token_display = f"{self.hf_token[:4]}...{self.hf_token[-4:]}"
+            print(f"DEBUG: HF_TOKEN found: {token_display}")
+        else:
+            print("DEBUG: HF_TOKEN NOT FOUND in environment or init.")
+
+        if self.hf_token:
+            # List of model IDs to try (standard IDs)
+            model_ids = [
+                "pyannote/speaker-diarization-3.1",
+                "pyannote/speaker-diarization@2.1",
+                "pyannote/speaker-diarization"
+            ]
+            
+            error_details = []
+            for model_id in model_ids:
                 try:
+                    print(f"Attempting to load diarization model: {model_id}")
+                    # Try with 'token' argument first
                     self.diarization_pipeline = Pipeline.from_pretrained(
-                        "pyannote/speaker-diarization-3.1",
+                        model_id,
                         token=self.hf_token
                     )
-                    if self.device == 0:
-                    	self.diarization_pipeline.to(torch.device("cuda"))
-                    print("✅ Pyannote speaker diarization loaded successfully.")
-                    print("   Using speaker-diarization-3.1")
-                except Exception as e2:
-                    # Suppress verbose error, just note that diarization is unavailable
-                    print("⚠️  Speaker diarization unavailable (using pitch-based gender detection instead)")
-                    print(f"   Reason: {str(e2)[:100]}")
-                    self.diarization_pipeline = None
+                    if self.diarization_pipeline:
+                        break
+                except Exception as e1:
+                    try:
+                        # Try with legacy 'use_auth_token' argument
+                        self.diarization_pipeline = Pipeline.from_pretrained(
+                            model_id,
+                            use_auth_token=self.hf_token
+                        )
+                        if self.diarization_pipeline:
+                            break
+                    except Exception as e2:
+                        error_details.append(f"{model_id}: {str(e2)}")
+                        continue
+            
+            if self.diarization_pipeline:
+                if self.device == 0:
+                    try:
+                        self.diarization_pipeline.to(torch.device("cuda"))
+                    except:
+                        pass
+                print(f"✅ Pyannote speaker diarization loaded successfully: {model_id}")
+            else:
+                print("❌ Speaker diarization failed to load after trying all models.")
+                for detail in error_details:
+                    print(f"   - {detail}")
+                self.diarization_pipeline = None
         else:
             print("No HF token provided, diarization will be restricted or skipped.")
 
         try:
             # Using a highly standard public model
+            from transformers import pipeline
             self.gender_pipeline = pipeline(
                 "audio-classification",
                 model="superb/wav2vec2-base-superb-sid",
@@ -68,7 +90,7 @@ class SpeakerAnalyzer:
             )
             print("✅ Pitch-based gender detection ready")
         except Exception as e:
-            print(f"⚠️  Gender model unavailable: {e}")
+            print(f"⚠️  Gender model unavailable (transformers import failed): {e}")
             # Final fallback
             self.gender_pipeline = None
 
@@ -87,7 +109,7 @@ class SpeakerAnalyzer:
             if isinstance(audio_path_or_data, np.ndarray):
                 # Pyannote pipeline expects a dict for in-memory audio
                 audio_input = {
-                    "waveform": torch.from_numpy(audio_path_or_data).unsqueeze(0),
+                    "waveform": torch.from_numpy(audio_path_or_data).float().unsqueeze(0),
                     "sample_rate": 16000
                 }
                 diarization = self.diarization_pipeline(audio_input)

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DEVICE: str = "cuda" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "cpu"
     
     # Point 3: Whisper Optimization & Configuration
-    WHISPER_MODEL_SIZE: str = "medium" # Options: small, medium, large-v3
+    WHISPER_MODEL_SIZE: str = "tiny" # Changed to tiny for maximum speed on CPU
     @property
     def WHISPER_MODEL_NAME(self) -> str:
         # Map size to specific model names if needed, or use directly

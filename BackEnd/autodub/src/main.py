@@ -19,11 +19,12 @@ from src.api.routes import router as pipeline_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. FFmpeg Detection (Point 1)
-    if not shutil.which("ffmpeg"):
-        logger.critical("FFmpeg not found! Please install FFmpeg and add it to your PATH.")
+    from src.utils.media_engine import MediaEngine
+    if not shutil.which(MediaEngine.FFMPEG_PATH):
+        logger.critical(f"FFmpeg not found at '{MediaEngine.FFMPEG_PATH}'! Please install FFmpeg and add it to your PATH.")
         sys.exit(1)
     
-    logger.info("FFmpeg check passed.")
+    logger.info(f"FFmpeg check passed: {MediaEngine.FFMPEG_PATH}")
 
     # 2. Model Warmup (Point 2)
     logger.info("Starting model warmup...")
@@ -79,7 +80,7 @@ app.add_middleware(
 )
 
 # ---------------- Static Files ----------------
-app.mount("/static", StaticFiles(directory="."), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ======================================================
 #                    HEALTH ENDPOINTS
