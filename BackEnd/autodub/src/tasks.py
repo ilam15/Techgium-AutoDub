@@ -109,6 +109,7 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
                     "id": segment_counter,
                     "start": seg.start + offset,
                     "end": seg.end + offset,
+                    "duration": seg.end - seg.start,
                     "text": seg.text,
                     "hint_lang": info.language,
                     "trace_id": trace_id,
@@ -273,14 +274,18 @@ def merge_final_video_task(trace_id: str):
     current_time = 0.0
     
     for i, seg in enumerate(segments):
-        # Fill gaps with original audio
-        if seg["start"] > current_time + 0.01:
+        # Precise Time-Alignment logic (MANDATORY FIX)
+        # Fill gaps with original audio sliced to EXACT dimensions
+        if seg["start"] > current_time + 0.005: # 5ms tolerance
+            gap_duration = seg["start"] - current_time
             gap = context.get_path(f"gap_{i}.wav")
+            # We slice EXACTLY up to the next start time to prevent lead/drift
             MediaEngine.slice_audio(source_audio, current_time, seg["start"], gap)
             audio_chunks.append(gap)
             
         # Add translated or original segment
         if seg.get("action") == "TRANSLATE" and seg.get("tts_path") and os.path.exists(seg["tts_path"]):
+            # TTS is already duration-locked to seg["duration"] by your_tts update
             audio_chunks.append(seg["tts_path"])
         else:
             keep = context.get_path(f"keep_{i}.wav")

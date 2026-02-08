@@ -100,17 +100,15 @@ class MediaEngine:
         
         Optimization:
         - -c:v copy: Zero video re-encoding (latency win)
-        - +faststart: Web-optimized (moves moov atom for quick start)
-        - Single pass remuxing
+        - -map 0:v -map 1:a: Explicitly map tracks
+        - -shortest: Ensure output ends when shortest stream ends
+        - -movflags +faststart: Web-optimized
         """
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video path not found: {video_path}")
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
-        # Check for hardware acceleration availability (optional)
-        # Note: Even without hwaccel, 'copy' is extremely fast as it's just I/O.
-        
         command = [
             cls.FFMPEG_PATH,
             "-y",
@@ -118,17 +116,17 @@ class MediaEngine:
             "-loglevel", "error",
             "-i", video_path,
             "-i", audio_path,
-            "-map", "0:v",       # Copy all video streams
-            "-map", "1:a:0",     # Take first audio stream from input 1
-            "-map_metadata", "0", # Preserve original metadata
-            "-c:v", "copy",      # Zero video re-encoding
-            "-c:a", "aac",       # Encode audio to AAC
-            "-b:a", "192k",      # High quality audio bitrate
-            "-movflags", "+faststart", # Optimize for web streaming
+            "-map", "0:v:0",      # Take video from input 0
+            "-map", "1:a:0",      # Take audio from input 1
+            "-c:v", "copy",       # Stream copy video
+            "-c:a", "aac",        # Encode audio to AAC
+            "-b:a", "192k",
+            "-shortest",          # Prevent trailing audio/video
+            "-movflags", "+faststart",
             os.path.abspath(output_path)
         ]
 
-        logger.info(f"Starting stream-copy merge: {' '.join(command)}")
+        logger.info(f"Starting Precision Merge: {' '.join(command)}")
         
         result = subprocess.run(command, capture_output=True, text=True)
         
@@ -136,8 +134,8 @@ class MediaEngine:
             logger.error(f"FFmpeg merge failed: {result.stderr}")
             raise RuntimeError(f"FFmpeg merge failed: {result.stderr}")
         
-        logger.info(f"Merge successful: {output_path}")
-        return output_path
+        # Apply Post-Merge Stabilization
+        return cls.stabilize_media(output_path)
 
     @classmethod
     def slice_audio(cls, input_path: str, start: float, end: float, output_path: str):
@@ -281,8 +279,7 @@ class MediaEngine:
     @classmethod
     def merge_complex(cls, video_path: str, tts_audio_path: str, background_audio_path: str, output_path: str, bg_volume: float = 0.3):
         """
-        One-pass merge with Audio Ducking.
-        Lowers background music when speech is present using the 'sidechain' filter approach.
+        One-pass merge with Audio Ducking and master-clock sync.
         """
         command = [
             cls.FFMPEG_PATH,
@@ -291,29 +288,51 @@ class MediaEngine:
             "-i", tts_audio_path,
             "-i", background_audio_path,
             "-filter_complex",
-            # Logic: 
-            # 1. Take Background [2:a] and scale it to base level.
-            # 2. Use TTS [1:a] as a control signal to duck Background.
-            # 3. Mix the ducked BG with the TTS.
             f"[2:a]volume={bg_volume}[bg_vol];" +
             "[1:a]asplit[v_mix][v_side];" +
             "[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2:release=500:attack=10[bg_ducked];" +
             "[v_mix][bg_ducked]amix=inputs=2:duration=longest[aout]",
-            "-map", "0:v",
+            "-map", "0:v:0",
             "-map", "[aout]",
-            "-map_metadata", "0",
             "-c:v", "copy",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-shortest", 
             "-movflags", "+faststart",
             os.path.abspath(output_path)
         ]
         
-        logger.info(f"Starting complex merge with ducking...")
+        logger.info(f"Starting complex master-clock merge...")
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"Complex merge with ducking failed: {result.stderr}")
-        return output_path
+            raise RuntimeError(f"Complex merge failed: {result.stderr}")
+        
+        return cls.stabilize_media(output_path)
+
+    @classmethod
+    def stabilize_media(cls, file_path: str):
+        """
+        Final stabilization pass (Drift Correction).
+        Aligns PTS and fixes micro-drifts using 'aresample=async=1'.
+        """
+        temp_stabilized = file_path.replace(".mp4", "_stable.mp4")
+        command = [
+            cls.FFMPEG_PATH,
+            "-y", "-hide_banner", "-loglevel", "error",
+            "-i", file_path,
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:v", "copy", # Still copy video
+            "-c:a", "aac",
+            temp_stabilized
+        ]
+        
+        logger.info(f"🚀 Running Drift Correction (Stabilization Pass)...")
+        res = subprocess.run(command, capture_output=True)
+        if res.returncode == 0:
+            os.replace(temp_stabilized, file_path)
+            return file_path
+        else:
+            logger.warning(f"Stabilization pass failed: {res.stderr.decode()}")
+            return file_path
 
     @classmethod
     def get_probe_info(cls, file_path: str) -> dict:

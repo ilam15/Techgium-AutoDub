@@ -112,7 +112,36 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
                 tts_path = stretched_path
 
         if tts_path and os.path.exists(tts_path):
-            shutil.copy(tts_path, audio_path)
+            # Final Precision Sync (Lipsync Guard)
+            # Ensures the final audio segment matches the expected duration exactly.
+            # This prevents accumulative drift where small errors add up to seconds of offset.
+            try:
+                final_audio = AudioSegment.from_file(tts_path)
+                current_len = len(final_audio)
+                
+                # We target milliseconds for maximum precision
+                if abs(current_len - target_dur_ms) > 5 or final_audio.frame_rate != 44100: 
+                    logger.info(f"📏 Finalizing Sync: {current_len}ms -> {target_dur_ms}ms (Precision padding/trim + 44.1kHz normalization)")
+                    
+                    # Normalize frame rate first for consistency
+                    if final_audio.frame_rate != 44100:
+                        final_audio = final_audio.set_frame_rate(44100)
+                        
+                    if current_len > target_dur_ms:
+                        # Trim if too long
+                        final_audio = final_audio[:target_dur_ms]
+                    else:
+                        # Pad with silence if too short
+                        padding = AudioSegment.silent(duration=target_dur_ms - current_len, frame_rate=44100)
+                        final_audio = final_audio + padding
+                    
+                    final_audio.export(audio_path, format="wav")
+                else:
+                    shutil.copy(tts_path, audio_path)
+            except Exception as e:
+                logger.warning(f"Final duration sync failed: {e}. Falling back to raw copy.")
+                shutil.copy(tts_path, audio_path)
+                
             return audio_path
     except Exception as e:
         logger.error(f"Error in your_tts processing: {e}")
@@ -137,6 +166,20 @@ class SRTDubbing:
             )
 
             return total_milliseconds
+
+    def create_folder_for_srt(self, srt_path, base_dir=None):
+        name = os.path.splitext(os.path.basename(srt_path))[0]
+        if not base_dir:
+            base_dir = settings.TEMP_DIR
+        folder = os.path.join(base_dir, f"dub_{name}_{uuid.uuid4().hex[:8]}")
+        os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def make_silence(self, duration_ms, output_path):
+        """Generates a high-quality silent WAV file of specific duration."""
+        # Use 44.1kHz to match the production mixing standard
+        silence = AudioSegment.silent(duration=int(duration_ms), frame_rate=44100)
+        silence.export(output_path, format="wav")
 
     @staticmethod
     def read_srt_file(file_path):
