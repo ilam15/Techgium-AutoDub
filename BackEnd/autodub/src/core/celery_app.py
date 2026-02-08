@@ -26,18 +26,18 @@ celery_app.conf.update(
     
     # Define Queues
     task_queues={
-        "default": {
-            "routing_key": "default",
-        },
-        "tts": {
-            "routing_key": "tts",
-        },
+        "separation": {"routing_key": "separation"},
+        "analysis": {"routing_key": "analysis"},
+        "merge": {"routing_key": "merge"},
     },
-    task_default_queue="default",
+    task_default_queue="separation",
     
-    # Route TTS tasks to the dedicated queue
+    # Task Routes
     task_routes={
-        "src.tasks.tts_segment_task": {"queue": "tts"},
+        "src.tasks.separation_task": {"queue": "separation"},
+        "src.tasks.analysis_task": {"queue": "analysis"},
+        "src.tasks.synthesis_task": {"queue": "merge"},
+        "src.tasks.merge_final_video_task": {"queue": "merge"},
     },
     
     # Visibility timeout for long tasks (1 hour)

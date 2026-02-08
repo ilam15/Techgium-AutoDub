@@ -108,8 +108,13 @@ class SpeakerAnalyzer:
             import numpy as np
             if isinstance(audio_path_or_data, np.ndarray):
                 # Pyannote pipeline expects a dict for in-memory audio
+                # Waveform MUST be (channel, time)
+                waveform = torch.from_numpy(audio_path_or_data).float()
+                if len(waveform.shape) == 1:
+                    waveform = waveform.unsqueeze(0) # (1, time)
+                
                 audio_input = {
-                    "waveform": torch.from_numpy(audio_path_or_data).float().unsqueeze(0),
+                    "waveform": waveform,
                     "sample_rate": 16000
                 }
                 diarization = self.diarization_pipeline(audio_input)

@@ -16,6 +16,7 @@ set KMP_DUPLICATE_LIB_OK=TRUE
 set "VENV_DIR=%BASE_DIR%..\venv311"
 set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
 set "CELERY_EXE=%VENV_DIR%\Scripts\celery.exe"
+set "REDIS_DIR=C:\Redis"
 
 :: 2. Verify Venv
 if not exist "%PYTHON_EXE%" (
@@ -26,29 +27,53 @@ if not exist "%PYTHON_EXE%" (
     exit /b 1
 )
 
-:: 3. Check for Redis
-echo [CHECK] Verifying Redis (Port 6379)...
+:: 3. Start Redis Server (only if not already running)
+echo [REDIS] Checking if Redis is already active...
+netstat -ano | findstr :6379 | findstr LISTENING >nul
+if %errorlevel% equ 0 (
+    echo [REDIS] Redis is already running. Skipping startup.
+) else (
+    echo [REDIS] Launching Redis...
+    if exist "%REDIS_DIR%\redis-server.exe" (
+        start "AutoDub_Redis" cmd /k "title REDIS_SERVER && cd /d %REDIS_DIR% && redis-server.exe --bind 127.0.0.1"
+    ) else (
+        echo [WARNING] Redis not found in %REDIS_DIR%. Trying system PATH...
+        start "AutoDub_Redis" cmd /k "title REDIS_SERVER && redis-server --bind 127.0.0.1"
+    )
+    timeout /t 5
+)
+
+:: 4. Clear old tasks & Verify
+echo [REDIS] Flushing old tasks to ensure fresh start...
+redis-cli -h 127.0.0.1 FLUSHALL
+echo [REDIS] Verifying Redis connection...
 netstat -ano | findstr :6379 | findstr LISTENING >nul
 if %errorlevel% neq 0 (
-    echo [ERROR] Redis is not running! 
-    echo Please start Redis before running this script.
+    echo [ERROR] Redis failed to start or is not accessible.
     pause
     exit /b 1
 )
 
-:: 4. Start API Server
+:: 5. Start API Server
 echo [API] Launching FastAPI...
 start "AutoDub_API" cmd /k "title API_SERVER && cd /d %BASE_DIR% && %PYTHON_EXE% -m src.main"
 
-:: 5. Start Default Worker (using -P solo for Windows stability)
-echo [WORKER] Launching Default Worker...
-start "AutoDub_Default_Worker" cmd /k "title DEFAULT_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q default -P solo"
+:: 6. Launch Terminal 1: Separation & Segmentation
+echo [TERMINAL 1] Launching Separation Worker...
+start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q separation -P solo"
 
-:: 6. Start TTS Worker (using -P solo for Windows stability)
-echo [WORKER] Launching TTS Worker...
-start "AutoDub_TTS_Worker" cmd /k "title TTS_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q tts -P solo"
+:: Launch Terminal 2: Analysis & Translation
+echo [TERMINAL 2] Launching Analysis Worker...
+start "AutoDub_Analysis_Worker" cmd /k "title ANALYSIS_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q analysis -P threads --concurrency=5"
+
+:: Launch Terminal 3: Synthesis & Merge
+echo [TERMINAL 3] Launching Merge Worker...
+start "AutoDub_Merge_Worker" cmd /k "title MERGE_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q merge -P solo --concurrency=4"
 
 echo ======================================================
-echo [OK] All windows launched with Windows-compatibility flags (-P solo).
+echo [OK] 3-Terminal Parallel Pipeline Launched!
+echo Terminal 1: Separation (ASR/VAD)
+echo Terminal 2: Analysis (Lang/Trans)
+echo Terminal 3: Merge (TTS/Final)
 echo ======================================================
 pause
