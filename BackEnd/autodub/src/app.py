@@ -32,6 +32,11 @@ class ModelManager:
             self._last_used[name] = time.time()
 
     def get_whisper(self) -> WhisperModel:
+        # Check first without lock (Performance optimization)
+        if "whisper" in self._models:
+            self.heartbeat("whisper")
+            return self._models["whisper"]
+            
         with self._lock:
             if "whisper" not in self._models:
                 try:
@@ -62,6 +67,10 @@ class ModelManager:
             return self._models["whisper"]
 
     def get_diarization(self, hf_token: str = None) -> SpeakerAnalyzer:
+        if "diarization" in self._models:
+            self.heartbeat("diarization")
+            return self._models["diarization"]
+            
         with self._lock:
             if "diarization" not in self._models:
                 logger.info("Initializing Speaker Analyzer...")
@@ -75,6 +84,10 @@ class ModelManager:
 
     def get_translator(self):
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+        if "translator" in self._models:
+            self.heartbeat("translator")
+            return self._models["translator"]
+            
         with self._lock:
             if "translator" not in self._models:
                 device_idx = 0 if settings.DEVICE == "cuda" and torch.cuda.is_available() else -1
@@ -82,7 +95,6 @@ class ModelManager:
                     model_id = "facebook/nllb-200-distilled-600M"
                     logger.info(f"Initializing NLLB-200 Translation Model [Device:{device_idx}]...")
                     
-                    # More robust loading for NLLB many-to-many model
                     tokenizer = AutoTokenizer.from_pretrained(model_id)
                     model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
                     

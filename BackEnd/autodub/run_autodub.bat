@@ -60,15 +60,17 @@ start "AutoDub_API" cmd /k "title API_SERVER && cd /d %BASE_DIR% && %PYTHON_EXE%
 
 :: 6. Launch Terminal 1: Separation & Segmentation
 echo [TERMINAL 1] Launching Separation Worker...
+:: T1 stays 'solo' for process isolation
 start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q separation -P solo"
 
 :: Launch Terminal 2: Analysis & Translation
-echo [TERMINAL 2] Launching Analysis Worker...
-start "AutoDub_Analysis_Worker" cmd /k "title ANALYSIS_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q analysis -P threads --concurrency=5"
+echo [TERMINAL 2] Launching Analysis Worker (Parallel Burst)...
+:: -Ofair + prefetch=1 ensures tasks are not hogged by one thread
+start "AutoDub_Analysis_Worker" cmd /k "title ANALYSIS_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q analysis -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
 
 :: Launch Terminal 3: Synthesis & Merge
-echo [TERMINAL 3] Launching Merge Worker...
-start "AutoDub_Merge_Worker" cmd /k "title MERGE_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q merge -P solo --concurrency=4"
+echo [TERMINAL 3] Launching Merge Worker (Parallel Burst)...
+start "AutoDub_Merge_Worker" cmd /k "title MERGE_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q merge -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
 
 echo ======================================================
 echo [OK] 3-Terminal Parallel Pipeline Launched!

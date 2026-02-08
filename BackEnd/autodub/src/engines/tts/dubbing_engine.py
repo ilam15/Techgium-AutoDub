@@ -62,14 +62,16 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
 
     # 2. Initial Generation
     if tts_model == "Kokoro TTS":
-        tts_path, _, _, _, _ = single_tts(text, Language=norm_lang, voice=voice_name, speed=speed)
+        # Terminal 2 handles translation; we only synthesize here.
+        tts_path, _, _, _, _ = single_tts(text, Language=norm_lang, voice=voice_name, speed=speed, translate=False)
         if tts_path is None:
             tts_model = "Microsoft TTS"
-            tts_path = tts(text, Language=lang, speed=speed, Gender=gender)
+            tts_path = tts(text, Language=lang, speed=speed, Gender=gender, translate_text_flag=False)
         else:
             tts_path = edge_silence_remove(tts_path)
     else:
-        tts_path = tts(text, Language=lang, speed=speed, Gender=gender)
+        # Terminal 2 handles translation; we only synthesize here.
+        tts_path = tts(text, Language=lang, speed=speed, Gender=gender, translate_text_flag=False)
 
     # 3. Elastic Speed Engine (Architecture P1)
     if not tts_path or not os.path.exists(tts_path):
@@ -128,16 +130,36 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
                         final_audio = final_audio.set_frame_rate(44100)
                         
                     if current_len > target_dur_ms:
-                        # Trim if too long
-                        final_audio = final_audio[:target_dur_ms]
+                        # FIX: Do NOT trim speech. Trimming causes word loss. 
+                        # In the Overlay model, it's safer to let it bleed/overlap.
+                        # We only trim if it's extremely long (e.g. > 2x original) as a safety.
+                        if current_len > target_dur_ms * 2:
+                            logger.warning(f"⚠️ Segment extremely long ({current_len}ms vs {target_dur_ms}ms). Trimming to 2x.")
+                            final_audio = final_audio[:target_dur_ms * 2]
                     else:
-                        # Pad with silence if too short
+                        # Pad with silence if too short (optional for overlay, but good for stability)
                         padding = AudioSegment.silent(duration=target_dur_ms - current_len, frame_rate=44100)
                         final_audio = final_audio + padding
                     
+                    # FIX 3: Apply fade-in / fade-out at boundaries (Professional smoothing)
+                    fade_ms = 100 
+                    if len(final_audio) > fade_ms * 2:
+                        final_audio = final_audio.fade_in(fade_ms).fade_out(fade_ms)
+                    
+                    # FIX 6: Guardrail validation
+                    if len(final_audio) < target_dur_ms * 0.8:
+                        logger.warning(f"⚠️ Guardrail breach (Short): {len(final_audio)}ms vs {target_dur_ms}ms.")
+
                     final_audio.export(audio_path, format="wav")
                 else:
-                    shutil.copy(tts_path, audio_path)
+                    # Normalize for overlay
+                    if final_audio.frame_rate != 44100:
+                        final_audio = final_audio.set_frame_rate(44100)
+                    
+                    fade_ms = 50
+                    if len(final_audio) > fade_ms * 2:
+                        final_audio = final_audio.fade_in(fade_ms).fade_out(fade_ms)
+                    final_audio.export(audio_path, format="wav")
             except Exception as e:
                 logger.warning(f"Final duration sync failed: {e}. Falling back to raw copy.")
                 shutil.copy(tts_path, audio_path)

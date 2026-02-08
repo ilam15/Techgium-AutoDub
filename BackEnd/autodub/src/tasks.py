@@ -50,9 +50,12 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     """
     self.update_state(state='PROGRESS', meta={'progress': 10, 'stage': 'Audio Separation'})
     logger.info(f"[{trace_id}] terminal_1: START - Extraction & Separation")
-    
     from src.engines.audio.processor import AudioProcessor
     context = RequestContext(trace_id)
+    
+    # Store the master video path for T3 access
+    REDIS_CLIENT.hset(f"pipeline:{trace_id}", "input_file", input_file)
+    REDIS_CLIENT.hset(f"pipeline:{trace_id}", "segments_done", 0)
     audio_proc = AudioProcessor()
     
     # 1. Extraction (Mono)
@@ -78,9 +81,9 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     else:
         REDIS_CLIENT.hset(f"pipeline:{trace_id}", "source_audio_path", temp_audio_path)
 
-    # 3. Streaming Segmentation
-    self.update_state(state='PROGRESS', meta={'progress': 30, 'stage': 'Streaming Segmentation'})
-    logger.info(f"[{trace_id}] terminal_1: START - Segmentation Streaming")
+    # 3. Speech-Unit Segmentation (MANDATORY FIX)
+    self.update_state(state='PROGRESS', meta={'progress': 30, 'stage': 'Speech-Unit Segmentation'})
+    logger.info(f"[{trace_id}] terminal_1: START - Speech-Unit Analysis")
     
     source_audio = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "source_audio_path").decode()
     import librosa
@@ -89,48 +92,105 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     from src.app import model_manager
     whisper_model = model_manager.get_whisper()
     
-    total_samples = len(audio_data)
-    chunk_samples = settings.PROBE_WINDOW_LONG * 16000
-    segment_counter = 0
+    from src.utils.utils import get_language_code
+    whisper_lang = None
+    if src_lang != "Automatic":
+        whisper_lang = get_language_code(src_lang)
     
-    for start_sample in range(0, total_samples, chunk_samples):
-        end_sample = min(start_sample + chunk_samples, total_samples)
-        chunk = audio_data[start_sample:end_sample]
-        if len(chunk) < 8000: continue
+    # Enable word-level timestamps for precision grouping
+    segments_iter, info = whisper_model.transcribe(
+        audio_data, 
+        word_timestamps=True,
+        vad_filter=True, 
+        language=whisper_lang
+    )
+    
+    segment_counter = 0
+    current_words = []
+    current_start = None
+    MAX_SENTENCE_DURATION = 6.0 
+    MIN_PAUSE_MS = 400 
+
+    def dispatch_unit(words, start, end):
+        nonlocal segment_counter
+        unit_text = " ".join([word.word.strip() for word in words])
+        if not unit_text.strip(): return
         
-        offset = start_sample / 16000
-        try:
-            segments_iter, info = whisper_model.transcribe(
-                chunk, vad_filter=True, language=None if src_lang=="Automatic" else src_lang
-            )
-            
-            for seg in segments_iter:
+        seg_data = {
+            "id": segment_counter,
+            "start": start,
+            "end": end,
+            "duration": end - start,
+            "text": unit_text,
+            "hint_lang": info.language,
+            "trace_id": trace_id,
+            "source_audio_path": source_audio
+        }
+        
+        # IMMEDIATE DISPATCH TO TERMINAL 2 (Analysis) - Parallel Win
+        analysis_task.apply_async(
+            args=[seg_data, dst_lang, user_known_languages],
+            queue='analysis'
+        )
+        logger.info(f"[{trace_id}] -> T1 STREAM-DISPATCH Speech-Unit {segment_counter} ('{unit_text[:20]}...')")
+        segment_counter += 1
+
+    for seg in segments_iter:
+        # Fallback: If no word timestamps, treat the whole segment as one block
+        if not seg.words:
+            logger.warning(f"[{trace_id}] Segment {seg.id} has no word-level timestamps. Falling back to segment-level markers.")
+            unit_text = seg.text.strip()
+            if unit_text:
                 seg_data = {
                     "id": segment_counter,
-                    "start": seg.start + offset,
-                    "end": seg.end + offset,
+                    "start": seg.start,
+                    "end": seg.end,
                     "duration": seg.end - seg.start,
-                    "text": seg.text,
+                    "text": unit_text,
                     "hint_lang": info.language,
                     "trace_id": trace_id,
                     "source_audio_path": source_audio
                 }
-                
-                # IMMEDIATE DISPATCH TO TERMINAL 2 (Analysis)
                 analysis_task.apply_async(
                     args=[seg_data, dst_lang, user_known_languages],
                     queue='analysis'
                 )
                 segment_counter += 1
-                logger.info(f"[{trace_id}] -> T1 dispatched Seg {segment_counter-1}")
-        except Exception as e:
-            logger.error(f"Segmentation error at {offset}s: {e}")
+            continue
+        
+        for w in seg.words:
+            if current_start is None:
+                current_start = w.start
+            
+            # Check for gap between current word and last word
+            if current_words:
+                last_end = current_words[-1].end
+                pause_duration = (w.start - last_end) * 1000
+                
+                # Split if pause is long OR if current unit is getting too long
+                if pause_duration > MIN_PAUSE_MS or (w.end - current_start) > MAX_SENTENCE_DURATION:
+                    dispatch_unit(current_words, current_start, last_end)
+                    current_words = []
+                    current_start = w.start
+            
+            current_words.append(w)
+            
+            # Split on punctuation (Sentence boundary)
+            clean_word = w.word.strip()
+            if clean_word.endswith(('.', '?', '!')):
+                dispatch_unit(current_words, current_start, w.end)
+                current_words = []
+                current_start = None
 
-    # Finalize T1: Store total count
+    # Final tail unit dispatch
+    if current_words:
+        dispatch_unit(current_words, current_start, current_words[-1].end)
+
+    # Finalize T1
     REDIS_CLIENT.hset(f"pipeline:{trace_id}", "total_segments", segment_counter)
-    REDIS_CLIENT.expire(f"pipeline:{trace_id}", 3600)  # Auto-clean in 1 hour
+    REDIS_CLIENT.expire(f"pipeline:{trace_id}", 3600)
     
-    logger.info(f"[{trace_id}] terminal_1: COMPLETE - Found {segment_counter} segments")
+    logger.info(f"[{trace_id}] terminal_1: COMPLETE - Generated {segment_counter} speech-units")
     
     # Check if T3 already finished everything before we set the total
     num_done = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "segments_done")
@@ -168,22 +228,32 @@ def analysis_task(segment: Dict[str, Any], dst_lang: str, user_known_languages: 
     src_lang_name = get_language_name(detected_lang)
     target_lang_name = get_language_name(dst_lang) if len(dst_lang) <= 3 else dst_lang
     
-    segment["src_lang_name"] = src_lang_name
+    # Priority Logic: If target is different from global source, FORCE translation
+    global_src_lang = get_language_name(segment.get("hint_lang", "en"))
+    segment["src_lang_name"] = global_src_lang
     segment["dst_lang_name"] = target_lang_name
-
-    if src_lang_name.lower() == target_lang_name.lower():
+    
+    if global_src_lang.lower() == target_lang_name.lower():
         segment["action"] = "KEEP"
     else:
+        # ABSOLUTE FORCE: If target != source, we MUST translate.
+        segment["action"] = "TRANSLATE"
         from src.engines.translation.translator import TranslationService
         context = RequestContext(trace_id)
         translator = TranslationService(context)
         try:
-            translated_text = translator.translate_text(segment["text"], src_lang_name, target_lang_name)
-            segment["translated_text"] = translated_text
-            segment["action"] = "TRANSLATE"
+            # Clean text before translation to prevent engine hangs
+            clean_text = segment["text"].strip()
+            if not clean_text:
+                segment["action"] = "KEEP" # Skip empty
+            else:
+                translated_text = translator.translate_text(clean_text, global_src_lang, target_lang_name)
+                segment["translated_text"] = translated_text
         except Exception as e:
-            logger.error(f"Translation failed for {segment['id']}: {e}")
-            segment["action"] = "KEEP"
+            logger.error(f"[{trace_id}] CRITICAL: Translation failed for segment {segment['id']}: {e}")
+            # Fallback to original text if translation literally crashes, but keep action as TRANSLATE
+            # so TTS still attempts to speak the original text in the new voice (better than nothing)
+            segment["translated_text"] = segment["text"]
 
     # IMMEDIATE DISPATCH TO TERMINAL 3 (Synthesis)
     synthesis_task.apply_async(
@@ -234,8 +304,7 @@ def synthesis_task(segment: Dict[str, Any]):
         logger.info(f"[{trace_id}] Progress: {num_done}/{total}")
         if num_done >= total:
             # All segments processed! Trigger Merge.
-            # We pass the input file info which should be stored in Redis too
-            source_video = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "original_video_path")
+            source_video = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "input_file")
             if source_video: source_video = source_video.decode()
             
             merge_final_video_task.apply_async(
@@ -250,84 +319,83 @@ def check_and_trigger_merge(trace_id, input_file):
 @celery_app.task(name="src.tasks.merge_final_video_task")
 def merge_final_video_task(trace_id: str):
     """
-    T3 Final Step: Assembles all segments into the final video.
+    T3 Final Step: Assembles all segments using the master-clock Overlay Mix.
     """
-    logger.info(f"[{trace_id}] terminal_3: START Final Merge")
-    
-    # 1. Retrieve all data from Redis
-    pipeline_data = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}")
-    source_audio = pipeline_data[b"source_audio_path"].decode()
-    bg_audio = pipeline_data.get(b"bg_audio_path")
-    if bg_audio: bg_audio = bg_audio.decode()
-    
-    results_raw = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}:results")
-    segments = []
-    for val in results_raw.values():
-        segments.append(json.loads(val.decode()))
-    
-    segments.sort(key=lambda x: x['start'])
-    
-    # 2. Reconstruct Timeline
-    from src.utils.media_engine import MediaEngine
-    context = RequestContext(trace_id)
-    audio_chunks = []
-    current_time = 0.0
-    
-    for i, seg in enumerate(segments):
-        # Precise Time-Alignment logic (MANDATORY FIX)
-        # Fill gaps with original audio sliced to EXACT dimensions
-        if seg["start"] > current_time + 0.005: # 5ms tolerance
-            gap_duration = seg["start"] - current_time
-            gap = context.get_path(f"gap_{i}.wav")
-            # We slice EXACTLY up to the next start time to prevent lead/drift
-            MediaEngine.slice_audio(source_audio, current_time, seg["start"], gap)
-            audio_chunks.append(gap)
-            
-        # Add translated or original segment
-        if seg.get("action") == "TRANSLATE" and seg.get("tts_path") and os.path.exists(seg["tts_path"]):
-            # TTS is already duration-locked to seg["duration"] by your_tts update
-            audio_chunks.append(seg["tts_path"])
-        else:
-            keep = context.get_path(f"keep_{i}.wav")
-            MediaEngine.slice_audio(source_audio, seg["start"], seg["end"], keep)
-            audio_chunks.append(keep)
-            
-        current_time = seg["end"]
+    try:
+        logger.info(f"[{trace_id}] terminal_3: START Final Overlay Merge")
         
-    # Final tail
-    probe = MediaEngine.get_probe_info(source_audio)
-    total_dur = float(probe['format']['duration'])
-    if current_time < total_dur:
-        tail = context.get_path("tail.wav")
-        MediaEngine.slice_audio(source_audio, current_time, total_dur, tail)
-        audio_chunks.append(tail)
+        # 1. Retrieve all data from Redis
+        pipeline_data = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}")
+        if not pipeline_data:
+            logger.error(f"[{trace_id}] No pipeline data found in Redis. Merge aborted.")
+            return None
+            
+        source_audio = pipeline_data.get(b"source_audio_path")
+        if not source_audio:
+            logger.error(f"[{trace_id}] source_audio_path missing in Redis.")
+            return None
+        source_audio = source_audio.decode()
         
-    # 3. Media Assembly
-    voice_path = context.get_path("final_vocal.wav")
-    MediaEngine.concat_audio_files(audio_chunks, voice_path)
-    
-    # Get original video path (stored during API call or T1)
-    input_file = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "input_file").decode()
-    
-    from src.core.config import settings
-    static_processed_dir = os.path.join(settings.BASE_DIR, "static", "processed")
-    os.makedirs(static_processed_dir, exist_ok=True)
-    
-    out_video_name = f"output_{trace_id}.mp4"
-    out_video = os.path.join(static_processed_dir, out_video_name)
-    
-    if bg_audio and os.path.exists(bg_audio):
-        MediaEngine.merge_complex(input_file, voice_path, bg_audio, out_video)
-    else:
-        MediaEngine.merge_audio_video(input_file, voice_path, out_video)
-    
-    # Cleanup and Return
-    logger.info(f"[{trace_id}] terminal_3: COMPLETE - Video ready at {out_video}")
-    
-    # Clear Redis data (optional, auto-expiry also exists)
-    REDIS_CLIENT.delete(f"pipeline:{trace_id}", f"pipeline:{trace_id}:results")
-    
-    return {
-        "video_url": f"processed/{out_video_name}",
-        "trace_id": trace_id
-    }
+        background_audio = pipeline_data.get(b"bg_audio_path")
+        if background_audio: background_audio = background_audio.decode()
+        
+        results_raw = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}:results")
+        segments_data = []
+        for val in results_raw.values():
+            segments_data.append(json.loads(val.decode()))
+        
+        logger.info(f"[{trace_id}] Merging {len(segments_data)} segments...")
+        segments_data.sort(key=lambda x: x['start'])
+        
+        # 2. Prepare Overlay Manifest
+        from src.utils.media_engine import MediaEngine
+        context = RequestContext(trace_id)
+        overlay_manifest = []
+        
+        for i, seg in enumerate(segments_data):
+            if seg.get("action") == "TRANSLATE" and seg.get("tts_path") and os.path.exists(seg["tts_path"]):
+                overlay_manifest.append({
+                    "path": seg["tts_path"],
+                    "start": seg["start"]
+                })
+            else:
+                # For KEEP segments, we slice the original audio
+                keep_path = context.get_path(f"keep_{i}.wav")
+                MediaEngine.slice_audio(source_audio, seg["start"], seg["end"], keep_path)
+                overlay_manifest.append({
+                    "path": keep_path,
+                    "start": seg["start"]
+                })
+                
+        # 3. Execution
+        input_file_bytes = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "input_file")
+        if not input_file_bytes:
+            logger.error(f"[{trace_id}] input_file missing in Redis.")
+            return None
+        input_file = input_file_bytes.decode()
+        
+        from src.core.config import settings
+        static_processed_dir = os.path.join(settings.BASE_DIR, "static", "processed")
+        os.makedirs(static_processed_dir, exist_ok=True)
+        
+        out_video_name = f"output_{trace_id}.mp4"
+        out_video = os.path.join(static_processed_dir, out_video_name)
+        
+        # Run the high-performance master-clock overlay mix
+        MediaEngine.overlay_segments(input_file, background_audio, overlay_manifest, out_video)
+        
+        # Cleanup and Return
+        logger.info(f"[{trace_id}] terminal_3: COMPLETE - Video ready at {out_video}")
+        
+        # Clear Redis data after successful merge
+        REDIS_CLIENT.delete(f"pipeline:{trace_id}", f"pipeline:{trace_id}:results")
+        
+        return {
+            "video_url": f"processed/{out_video_name}",
+            "trace_id": trace_id
+        }
+    except Exception as e:
+        import traceback
+        logger.error(f"[{trace_id}] CRITICAL: Final merge failed: {e}")
+        logger.error(traceback.format_exc())
+        return None

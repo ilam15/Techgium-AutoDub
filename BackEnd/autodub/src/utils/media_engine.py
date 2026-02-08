@@ -1,6 +1,7 @@
 import subprocess
 import os
 import logging
+import uuid
 from typing import Generator
 
 # Production-grade logging
@@ -109,6 +110,10 @@ class MediaEngine:
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
+        # Get Video Duration to prevent truncation
+        probe = cls.get_probe_info(video_path)
+        video_dur = probe['format'].get('duration', '0')
+
         command = [
             cls.FFMPEG_PATH,
             "-y",
@@ -121,7 +126,7 @@ class MediaEngine:
             "-c:v", "copy",       # Stream copy video
             "-c:a", "aac",        # Encode audio to AAC
             "-b:a", "192k",
-            "-shortest",          # Prevent trailing audio/video
+            "-t", str(video_dur), # FORCE master video duration
             "-movflags", "+faststart",
             os.path.abspath(output_path)
         ]
@@ -277,6 +282,101 @@ class MediaEngine:
         return output_path
 
     @classmethod
+    def create_silent_base(cls, duration: float, output_path: str):
+        """Creates a silent base track for full video duration."""
+        command = [
+            cls.FFMPEG_PATH,
+            "-y", "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", str(duration),
+            output_path
+        ]
+        subprocess.run(command, check=True)
+        return output_path
+
+    @classmethod
+    def overlay_segments(cls, video_path: str, background_audio_path: str, segments: list, output_path: str, bg_volume: float = 1.0):
+        """
+        Refactored Overlay Mix: Uses Filter Scripts to bypass OS command limits.
+        Ensures perfect master-clock sync using adelay and a finite base track.
+        """
+        if not segments:
+            logger.warning("No segments to overlay. Performing simple merge.")
+            return cls.merge_audio_video(video_path, background_audio_path or "", output_path)
+
+        # 1. Get Video Duration for Finite Base
+        probe = cls.get_probe_info(video_path)
+        video_dur = float(probe['format']['duration'])
+
+        # 2. Build Filter Script
+        filter_parts = []
+        # [1:a] is Background or silent base
+        filter_parts.append(f"[1:a]volume={bg_volume}[bg_vol]")
+        
+        mix_labels = []
+        for i, seg in enumerate(segments):
+            in_idx = i + 2
+            label = f"s{i}"
+            delay_ms = int(seg["start"] * 1000)
+            # Use 'adelay' for absolute positioning (Fix 3)
+            filter_parts.append(f"[{in_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+            mix_labels.append(f"[{label}]")
+            
+        # Dialogue Mix + Critical Volume Fix (Architecture P3)
+        # amix attenuates by 1/n inputs. We must multiply by len(segments) to keep volume 1:1,
+        # then apply a 1.5x boost for clarity over the background.
+        num_segs = len(segments)
+        active_boost = 1.5
+        filter_parts.append(f"{''.join(mix_labels)}amix=inputs={num_segs}:dropout_transition=1000,volume={num_segs * active_boost}[dialogue]")
+        
+        # Sidechain Ducking (PRECISE PASS)
+        # Background remains 1.0 (original) but ducks smoothly to 0.4x when dialogue is active.
+        filter_parts.append("[dialogue]asplit[v_mix][v_side]")
+        filter_parts.append("[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2.5:release=500:attack=10[bg_ducked]")
+        
+        # Final Mix: Compensate for amix normalization (inputs=2)
+        filter_parts.append("[v_mix][bg_ducked]amix=inputs=2:duration=longest,volume=2[aout]")
+
+        filter_script_path = os.path.join(os.path.dirname(output_path), f"filter_{uuid.uuid4().hex[:8]}.txt")
+        with open(filter_script_path, "w", encoding="utf-8") as f:
+            f.write(";\n".join(filter_parts))
+
+        # 3. Assemble Command
+        cmd = [cls.FFMPEG_PATH, "-y", "-hide_banner", "-loglevel", "error"]
+        cmd.extend(["-i", video_path]) # Input 0
+        
+        if background_audio_path and os.path.exists(background_audio_path):
+            cmd.extend(["-i", background_audio_path]) # Input 1
+        else:
+            # Create finite silent base (Crucial for amix duration stability)
+            cmd.extend(["-f", "lavfi", "-t", str(video_dur), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"])
+
+        for seg in segments:
+            cmd.extend(["-i", seg["path"]])
+
+        cmd.extend([
+            "-filter_complex_script", filter_script_path,
+            "-map", "0:v:0",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-t", str(video_dur), # Anchor to master video duration (prevents reduction)
+            "-movflags", "+faststart",
+            os.path.abspath(output_path)
+        ])
+
+        try:
+            logger.info(f"🚀 Executing Scripted Overlay Mix (Max Stability: {len(segments)} inputs)...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg overlay failed: {result.stderr}")
+        finally:
+            if os.path.exists(filter_script_path):
+                os.remove(filter_script_path)
+
+        return cls.stabilize_media(output_path)
+
+    @classmethod
     def merge_complex(cls, video_path: str, tts_audio_path: str, background_audio_path: str, output_path: str, bg_volume: float = 0.3):
         """
         One-pass merge with Audio Ducking and master-clock sync.
@@ -315,24 +415,30 @@ class MediaEngine:
         Aligns PTS and fixes micro-drifts using 'aresample=async=1'.
         """
         temp_stabilized = file_path.replace(".mp4", "_stable.mp4")
+        
+        # Get duration for safety
+        probe = cls.get_probe_info(file_path)
+        dur = probe['format'].get('duration')
+
         command = [
             cls.FFMPEG_PATH,
             "-y", "-hide_banner", "-loglevel", "error",
             "-i", file_path,
             "-af", "aresample=async=1:first_pts=0",
-            "-c:v", "copy", # Still copy video
+            "-c:v", "copy", 
             "-c:a", "aac",
-            temp_stabilized
+            "-t", str(dur) if dur else "0"
         ]
         
-        logger.info(f"🚀 Running Drift Correction (Stabilization Pass)...")
-        res = subprocess.run(command, capture_output=True)
-        if res.returncode == 0:
-            os.replace(temp_stabilized, file_path)
-            return file_path
-        else:
-            logger.warning(f"Stabilization pass failed: {res.stderr.decode()}")
-            return file_path
+        if dur:
+            command.append(temp_stabilized)
+            logger.info(f"🚀 Running Drift Correction (Stabilization Pass)...")
+            res = subprocess.run(command, capture_output=True)
+            if res.returncode == 0:
+                os.replace(temp_stabilized, file_path)
+                return file_path
+        
+        return file_path
 
     @classmethod
     def get_probe_info(cls, file_path: str) -> dict:

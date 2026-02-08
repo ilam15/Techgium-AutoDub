@@ -93,3 +93,9 @@ def get_language_name(lang_code):
         if details["lang_code"] == lang_code:
             return language  # Return the language name
     return lang_code
+
+def get_language_code(language_name):
+    global language_dict
+    if language_name in language_dict:
+        return language_dict[language_name]["lang_code"]
+    return None
