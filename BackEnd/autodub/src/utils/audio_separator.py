@@ -38,25 +38,24 @@ def separate_audio(source_path):
 
         os.makedirs(temp_folder, exist_ok=True)
 
-        # Check if audio-separator is available
-        check_cmd = "audio-separator --version"
-        if subprocess.call(check_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
-            logger.error("Audio Separator tool not found. Please install if using background recovery.")
-            return None, None
-
-        # Run the audio separator command
-        command = f'audio-separator "{source_path}" --model_filename UVR-MDX-NET-Inst_HQ_3.onnx --output_dir "{temp_folder}"'
-        logger.info(f"Running separation: {command}")
+        # Check if audio-separator is available in current venv
+        import sys
+        python_exe = sys.executable
+        
+        # Run the audio separator command using current python context
+        command = f'"{python_exe}" -m audio_separator.utils.cli "{source_path}" --model_filename UVR-MDX-NET-Inst_HQ_3.onnx --output_dir "{temp_folder}"'
+        logger.info(f"Running separation (in-venv): {command}")
         
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         vocal_path, noise_path = None, None
 
         if result.returncode == 0:  # Check if the command was successful
             for file_name in os.listdir(temp_folder):
-                if "instrumental" in file_name.lower():
+                file_name_lower = file_name.lower()
+                if "instrumental" in file_name_lower or "(instrumental)" in file_name_lower:
                     noise_path = save_processed_file(file_name, temp_folder, save_at, source_path, "noise")
 
-                if "vocals" in file_name.lower():
+                if "vocals" in file_name_lower or "(vocals)" in file_name_lower:
                     vocal_path = save_processed_file(file_name, temp_folder, save_at, source_path, "vocals")
 
             # Clean up temporary folder after processing

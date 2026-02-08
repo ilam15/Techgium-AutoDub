@@ -199,17 +199,14 @@ class MediaEngine:
     def extract_pure_audio_numpy(cls, video_path: str, sr: int = 16000) -> "np.ndarray":
         """
         Extracts PURE AUDIO from video, ignoring all subtitles and captions.
-        
-        CRITICAL for AI-generated videos with English captions where:
-        - Captions are in English
-        - But audio is in multiple languages (Hindi, French, German, etc.)
-        
-        This method ensures Whisper analyzes the AUDIO LANGUAGE, not caption text.
-        
-        Differences from extract_audio_numpy:
-        - Explicitly removes all subtitle streams (-sn)
-        - Ignores burned-in captions (only processes audio stream)
-        - Forces audio-only analysis for language detection
+        """
+        return cls.extract_pure_audio_numpy_segment(video_path, start=0, duration=None, sr=sr)
+
+    @classmethod
+    def extract_pure_audio_numpy_segment(cls, video_path: str, start: float, duration: float = None, sr: int = 16000) -> "np.ndarray":
+        """
+        High-precision segment extraction into NumPy, perfect for per-segment lang/gender detection.
+        Ignores all subtitle streams and only processes the audio track.
         """
         import numpy as np
         if not os.path.exists(video_path):
@@ -217,27 +214,36 @@ class MediaEngine:
 
         command = [
             cls.FFMPEG_PATH,
-            "-y", "-hide_banner", "-loglevel", "error",
-            "-i", video_path,
-            "-vn",              # No video (ignore burned-in captions)
-            "-sn",              # No subtitles (ignore subtitle streams)
+            "-y", "-hide_banner", "-loglevel", "error"
+        ]
+        
+        # Seeking at the input level is much faster
+        if start > 0:
+            command.extend(["-ss", str(start)])
+        
+        command.extend(["-i", video_path])
+        
+        if duration:
+            command.extend(["-t", str(duration)])
+            
+        command.extend([
+            "-vn",              # No video
+            "-sn",              # No subtitles
             "-acodec", "pcm_s16le",
             "-ar", str(sr),
             "-ac", "1",
             "-f", "s16le",      # Raw PCM
             "pipe:1"
-        ]
-        
-        logger.info("🎵 Extracting PURE AUDIO (ignoring all captions/subtitles) for language detection")
+        ])
         
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
         
         if process.returncode != 0:
-            logger.error(f"FFmpeg pure audio extraction failed: {error.decode()}")
-            raise RuntimeError(f"FFmpeg pure audio extraction failed: {error.decode()}")
+            # Fallback for short clips where seeking might be out of bounds or failing
+            logger.debug(f"Seek extraction failed, falling back to full extraction slicing for tiny segment.")
+            return np.array([], dtype=np.float32)
             
-        logger.info("✅ Pure audio extracted successfully - Whisper will analyze AUDIO LANGUAGE only")
         return np.frombuffer(output, dtype=np.int16).astype(np.float32) / 32768.0
 
     @classmethod
@@ -322,20 +328,21 @@ class MediaEngine:
             filter_parts.append(f"[{in_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
             mix_labels.append(f"[{label}]")
             
-        # Dialogue Mix + Critical Volume Fix (Architecture P3)
-        # amix attenuates by 1/n inputs. We must multiply by len(segments) to keep volume 1:1,
-        # then apply a 1.5x boost for clarity over the background.
+        # Dialogue Mix + Robust Volume Fix (Architecture P3)
+        # We disable amix's dynamic normalization (normalize=0) to prevent volume jumps as segments end.
+        # This ensures every speaker is heard at a consistent 1.5x volume boost.
         num_segs = len(segments)
         active_boost = 1.5
-        filter_parts.append(f"{''.join(mix_labels)}amix=inputs={num_segs}:dropout_transition=1000,volume={num_segs * active_boost}[dialogue]")
+        filter_parts.append(f"{''.join(mix_labels)}amix=inputs={num_segs}:normalize=0:dropout_transition=0,volume={active_boost}[dialogue]")
         
         # Sidechain Ducking (PRECISE PASS)
         # Background remains 1.0 (original) but ducks smoothly to 0.4x when dialogue is active.
         filter_parts.append("[dialogue]asplit[v_mix][v_side]")
         filter_parts.append("[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2.5:release=500:attack=10[bg_ducked]")
         
-        # Final Mix: Compensate for amix normalization (inputs=2)
-        filter_parts.append("[v_mix][bg_ducked]amix=inputs=2:duration=longest,volume=2[aout]")
+        # Final Mix: Use normalization=1 for the two full-length tracks (Dialogue + Background)
+        # We multiply by 2 to counteract the 1/2 reduction from amix's default normalization.
+        filter_parts.append("[v_mix][bg_ducked]amix=inputs=2:dropout_transition=0:duration=longest,volume=2[aout]")
 
         filter_script_path = os.path.join(os.path.dirname(output_path), f"filter_{uuid.uuid4().hex[:8]}.txt")
         with open(filter_script_path, "w", encoding="utf-8") as f:

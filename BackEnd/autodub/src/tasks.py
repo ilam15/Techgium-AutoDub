@@ -33,11 +33,13 @@ def trigger_autodub_pipeline(input_file, src_lang, dst_lang, gender, recover_bg,
     REDIS_CLIENT.expire(f"pipeline:{trace_id}", 3600)
     
     # Start Terminal 1: Separation & Segmentation
-    result = separation_task.apply_async(
+    task = separation_task.apply_async(
         args=[input_file, src_lang, dst_lang, gender, recover_bg, user_known_languages, trace_id],
         queue='separation'
     )
-    return result.id
+    # Store mapping for progress polling
+    REDIS_CLIENT.set(f"task:{task.id}:trace", trace_id, ex=3600)
+    return task.id
 
 # ------------------------------------------------------------------------------
 # TERMINAL 1: SEPARATION & SEGMENTATION (Queue: separation)
@@ -223,36 +225,61 @@ def analysis_task(segment: Dict[str, Any], dst_lang: str, user_known_languages: 
     gender = analyzer.identify_gender_for_segment(segment["source_audio_path"], segment["start"], segment["end"])
     segment["gender"] = gender
     
-    # 2. Language Detection & Translation
-    detected_lang = segment.get("hint_lang", "English")
-    src_lang_name = get_language_name(detected_lang)
-    target_lang_name = get_language_name(dst_lang) if len(dst_lang) <= 3 else dst_lang
+    # 2. Strict Language Detection (Per-Segment)
+    from src.utils.media_engine import MediaEngine
+    from src.core.context import RequestContext
     
-    # Priority Logic: If target is different from global source, FORCE translation
-    global_src_lang = get_language_name(segment.get("hint_lang", "en"))
-    segment["src_lang_name"] = global_src_lang
+    # 2a. Extract segment audio for clinical detection
+    audio_chunk = MediaEngine.extract_pure_audio_numpy_segment(
+        segment["source_audio_path"],
+        segment["start"],
+        segment["duration"]
+    )
+    
+    # 2b. High-Priority Audio-Based Language Detection
+    if len(audio_chunk) > 0:
+        whisper_model = model_manager.get_whisper()
+        # Fast pass: beam_size=1 is balanced for speed vs accuracy in detection
+        # We also get the text to ensure it's transcribed in the CORRECT detected language
+        results_iter, info = whisper_model.transcribe(audio_chunk, beam_size=1)
+        detected_lang_name = get_language_name(info.language)
+        
+        # Capture the localized text for high-fidelity translation
+        localized_text = " ".join([c.text for c in results_iter]).strip()
+        if localized_text:
+            segment["text"] = localized_text
+            
+        segment["detected_lang"] = detected_lang_name
+        segment["detect_confidence"] = info.language_probability
+    else:
+        # Fallback to T1 hint only if audio extraction fails
+        detected_lang_name = get_language_name(segment.get("hint_lang", "en"))
+        segment["detected_lang"] = detected_lang_name
+
+    target_lang_name = get_language_name(dst_lang) if len(dst_lang) <= 3 else dst_lang
     segment["dst_lang_name"] = target_lang_name
     
-    if global_src_lang.lower() == target_lang_name.lower():
+    # 3. Decision Logic: STACK clinical rule
+    # If it is not the target language, it MUST be translated.
+    if detected_lang_name.lower() == target_lang_name.lower():
+        logger.info(f"[{trace_id}] Segment {segment['id']} matches target ({target_lang_name}). Action: KEEP.")
         segment["action"] = "KEEP"
     else:
-        # ABSOLUTE FORCE: If target != source, we MUST translate.
+        logger.info(f"[{trace_id}] Segment {segment['id']} is {detected_lang_name} (Target: {target_lang_name}). Action: TRANSLATE.")
         segment["action"] = "TRANSLATE"
+        
         from src.engines.translation.translator import TranslationService
         context = RequestContext(trace_id)
         translator = TranslationService(context)
         try:
-            # Clean text before translation to prevent engine hangs
             clean_text = segment["text"].strip()
             if not clean_text:
-                segment["action"] = "KEEP" # Skip empty
+                segment["action"] = "KEEP" # Skip silent/empty
             else:
-                translated_text = translator.translate_text(clean_text, global_src_lang, target_lang_name)
+                translated_text = translator.translate_text(clean_text, detected_lang_name, target_lang_name)
                 segment["translated_text"] = translated_text
         except Exception as e:
             logger.error(f"[{trace_id}] CRITICAL: Translation failed for segment {segment['id']}: {e}")
-            # Fallback to original text if translation literally crashes, but keep action as TRANSLATE
-            # so TTS still attempts to speak the original text in the new voice (better than nothing)
             segment["translated_text"] = segment["text"]
 
     # IMMEDIATE DISPATCH TO TERMINAL 3 (Synthesis)
@@ -293,24 +320,22 @@ def synthesis_task(segment: Dict[str, Any]):
             segment["action"] = "KEEP"
 
     # 📖 Bookkeeping: Save processed segment to Redis
-    REDIS_CLIENT.hset(f"pipeline:{trace_id}:results", segment["id"], json.dumps(segment))
-    
-    # Check if we are done
-    num_done = REDIS_CLIENT.hincrby(f"pipeline:{trace_id}", "segments_done", 1)
-    total = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "total_segments")
-    
-    if total is not None:
-        total = int(total)
-        logger.info(f"[{trace_id}] Progress: {num_done}/{total}")
-        if num_done >= total:
-            # All segments processed! Trigger Merge.
-            source_video = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "input_file")
-            if source_video: source_video = source_video.decode()
-            
-            merge_final_video_task.apply_async(
-                args=[trace_id],
-                queue='merge'
-            )
+    try:
+        REDIS_CLIENT.hset(f"pipeline:{trace_id}:results", segment["id"], json.dumps(segment))
+        
+        # Check if we are done
+        num_done = REDIS_CLIENT.hincrby(f"pipeline:{trace_id}", "segments_done", 1)
+        total_raw = REDIS_CLIENT.hget(f"pipeline:{trace_id}", "total_segments")
+        
+        logger.info(f"[{trace_id}] T3 Bookkeeping Seg {segment['id']} -> Progress: {num_done}/{'?' if not total_raw else total_raw.decode()}")
+        
+        if total_raw is not None:
+            total = int(total_raw)
+            if num_done >= total:
+                logger.info(f"[{trace_id}] All {total} segments accounted for. Triggering Final Merge.")
+                merge_final_video_task.apply_async(args=[trace_id], queue='merge')
+    except Exception as e:
+        logger.error(f"[{trace_id}] Bookkeeping failed for Seg {segment['id']}: {e}")
 
 def check_and_trigger_merge(trace_id, input_file):
     """Helper for zero-segment videos"""
@@ -341,7 +366,7 @@ def merge_final_video_task(trace_id: str):
         
         results_raw = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}:results")
         segments_data = []
-        for val in results_raw.values():
+        for sid, val in results_raw.items():
             segments_data.append(json.loads(val.decode()))
         
         logger.info(f"[{trace_id}] Merging {len(segments_data)} segments...")

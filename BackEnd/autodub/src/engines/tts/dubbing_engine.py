@@ -31,8 +31,8 @@ def get_subtitle_Dub_path(srt_file_path, Language="en"):
 def edge_silence_remove(audio_path):
     try:
         y, sr = librosa.load(audio_path)
-        # Trim leading and trailing silence
-        y_trimmed, index = librosa.effects.trim(y, top_db=30)
+        # Trim leading and trailing silence - top_db 60 is safer for preserved speech onset
+        y_trimmed, index = librosa.effects.trim(y, top_db=60)
         save_path = audio_path.replace(".wav", "_no_edge_silence.wav")
         sf.write(save_path, y_trimmed, sr)
         return save_path
@@ -67,8 +67,6 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
         if tts_path is None:
             tts_model = "Microsoft TTS"
             tts_path = tts(text, Language=lang, speed=speed, Gender=gender, translate_text_flag=False)
-        else:
-            tts_path = edge_silence_remove(tts_path)
     else:
         # Terminal 2 handles translation; we only synthesize here.
         tts_path = tts(text, Language=lang, speed=speed, Gender=gender, translate_text_flag=False)
@@ -141,10 +139,9 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
                         padding = AudioSegment.silent(duration=target_dur_ms - current_len, frame_rate=44100)
                         final_audio = final_audio + padding
                     
-                    # FIX 3: Apply fade-in / fade-out at boundaries (Professional smoothing)
-                    fade_ms = 100 
-                    if len(final_audio) > fade_ms * 2:
-                        final_audio = final_audio.fade_in(fade_ms).fade_out(fade_ms)
+                    # Normalization pass
+                    if final_audio.frame_rate != 44100:
+                        final_audio = final_audio.set_frame_rate(44100)
                     
                     # FIX 6: Guardrail validation
                     if len(final_audio) < target_dur_ms * 0.8:
@@ -156,9 +153,6 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
                     if final_audio.frame_rate != 44100:
                         final_audio = final_audio.set_frame_rate(44100)
                     
-                    fade_ms = 50
-                    if len(final_audio) > fade_ms * 2:
-                        final_audio = final_audio.fade_in(fade_ms).fade_out(fade_ms)
                     final_audio.export(audio_path, format="wav")
             except Exception as e:
                 logger.warning(f"Final duration sync failed: {e}. Falling back to raw copy.")

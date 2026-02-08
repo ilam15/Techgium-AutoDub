@@ -172,36 +172,70 @@ async def download_youtube_video(request: YouTubeDownloadRequest):
 @router.get("/task/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """
-    Check the status of a Celery task.
+    Check the status of a Celery task with distributed pipeline awareness.
     """
+    from src.tasks import REDIS_CLIENT
     try:
         result = AsyncResult(task_id, app=celery_app)
         
+        # 1. Base status from Celery
         response = {
             "task_id": task_id,
             "status": result.status,
             "progress": 0,
-            "stage": "Queued",
+            "stage": "Initializing",
             "result": None,
             "error": None
         }
 
-        # Check for progress updates (custom state 'PROGRESS')
+        # 2. Pipeline-Aware Progress (Redis)
+        trace_id_bytes = REDIS_CLIENT.get(f"task:{task_id}:trace")
+        if trace_id_bytes:
+            trace_id = trace_id_bytes.decode()
+            pipeline_data = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}")
+            if pipeline_data:
+                done = int(pipeline_data.get(b"segments_done", 0))
+                total = int(pipeline_data.get(b"total_segments", 0))
+                
+                if total > 0:
+                    # Logic: T1 takes ~30% for separation. T3 takes remaining 70%
+                    p = (done / total) * 100
+                    response["progress"] = min(99, p)
+                    response["stage"] = f"Dubbing Segments ({done}/{total})"
+
+        # 3. Handle Lifecycle
         if result.status == 'PROGRESS':
-            response["progress"] = result.info.get('progress', 0)
-            response["stage"] = result.info.get('stage', 'Processing')
-        elif result.status == 'SUCCESS':
-            response["progress"] = 100
-            response["stage"] = "Completed"
-            response["result"] = result.result
+            # Use T1 status if available
+            response["progress"] = max(response["progress"], result.info.get('progress', 0))
+            response["stage"] = result.info.get('stage', 'Segmenting Audio')
             
-            # Prepend /static/ to urls
-            if response["result"]:
-                for key in ["video_url", "original_video_url"]:
-                    if key in response["result"]:
-                        fn = response["result"][key]
-                        if fn and not fn.startswith(("http", "/")):
-                             response["result"][key] = f"/static/{fn}"
+        elif result.status == 'SUCCESS':
+            # Even if T1 (Celery) is SUCCESS, wait for T3 (Final Merge)
+            if trace_id_bytes:
+                trace_id = trace_id_bytes.decode()
+                # Check if output file exists
+                out_name = f"output_{trace_id}.mp4"
+                processed_path = os.path.join(settings.BASE_DIR, "static", "processed", out_name)
+                
+                if os.path.exists(processed_path):
+                    response["status"] = "SUCCESS"
+                    response["progress"] = 100
+                    response["stage"] = "Completed"
+                    response["result"] = {
+                        "video_url": f"/static/processed/{out_name}",
+                        "original_video_url": f"/static/{os.path.basename(result.result.get('input_file', ''))}" if result.result else ""
+                    }
+                else:
+                    # Still merging...
+                    response["status"] = "PROGRESS"
+                    response["stage"] = "Finalizing Video Merge"
+                    response["progress"] = 99
+            else:
+                # Fallback for old tasks
+                response["progress"] = 100
+                response["stage"] = "Completed"
+                response["result"] = result.result
+
         elif result.status == 'FAILURE':
             response["status"] = "FAILED"
             response["error"] = str(result.info)
