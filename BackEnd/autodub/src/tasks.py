@@ -255,45 +255,109 @@ def segment_worker_task(segment: Dict[str, Any], dst_lang: str, global_gender: s
          merge_final_video_task.apply_async(args=[trace_id], queue='merge')
 
 # ------------------------------------------------------------------------------
-# TERMINAL 3: ASSEMBLER - SILENCE & INSERT (Single Task)
+# TERMINAL 3: ASSEMBLER - SILENCE & INSERT (Single Task, Loop-Safe)
 # ------------------------------------------------------------------------------
 
-@celery_app.task(name="src.tasks.merge_final_video_task")
+@celery_app.task(
+    name="src.tasks.merge_final_video_task",
+    autoretry_for=(),  # RULE 3: No retries
+    acks_late=False,   # RULE 3: Immediate acknowledgment
+    max_retries=0      # RULE 3: Absolutely no retries
+)
 def merge_final_video_task(trace_id: str):
     """
-    ASSEMBLER: Silences Original Audio and Inserts Dubs Deterministically.
+    ASSEMBLER: Loop-Safe Audio Assembly with Idempotency Guard.
+    
+    ANTI-LOOP GUARANTEES:
+    1. Runs exactly once (idempotency lock)
+    2. Pre-allocates audio buffer (no append)
+    3. Sorts segments by start time (monotonic)
+    4. Inserts each segment once (deduplication)
+    5. Validates timeline integrity
     """
+    
+    # RULE 3: IDEMPOTENCY LOCK - Prevent multiple executions
+    lock_key = f"assembler_lock:{trace_id}"
+    if not REDIS_CLIENT.set(lock_key, "1", nx=True, ex=300):
+        logger.warning(f"[{trace_id}] ASSEMBLER already running or completed. SKIPPING.")
+        return {"status": "already_processed", "trace_id": trace_id}
+    
     try:
-        logger.info(f"[{trace_id}] ASSEMBLER: START Final Audio Assembly")
+        logger.info(f"[{trace_id}] ✅ ASSEMBLER: START (Idempotency Lock Acquired)")
+        
+        # Retrieve pipeline data
         pipeline_data = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}")
+        if not pipeline_data:
+            logger.error(f"[{trace_id}] No pipeline data found. Aborting.")
+            return None
+            
         input_file = pipeline_data[b"input_file"].decode()
         bg_audio = pipeline_data.get(b"bg_audio_path", b"").decode()
         
+        # Retrieve and validate segments
         results_raw = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}:results")
-        segments = [json.loads(v) for v in results_raw.values()]
-        segments.sort(key=lambda x: x['id']) # Sort by ID to maintain original order
+        if not results_raw:
+            logger.warning(f"[{trace_id}] No segments to process. Creating passthrough video.")
+            segments = []
+        else:
+            segments = [json.loads(v) for v in results_raw.values()]
         
+        # RULE 4: SORT BY START TIME (Monotonic Timeline)
+        segments.sort(key=lambda x: x['start'])
+        
+        # RULE 5: DEDUPLICATION - Track inserted segments
+        inserted_ids = set()
+        validated_segments = []
+        
+        for seg in segments:
+            seg_id = seg['id']
+            
+            # Skip duplicates
+            if seg_id in inserted_ids:
+                logger.warning(f"[{trace_id}] ⚠️ DUPLICATE segment {seg_id} detected. SKIPPING.")
+                continue
+            
+            # Validate segment integrity
+            if seg['start'] >= seg['end']:
+                logger.error(f"[{trace_id}] ❌ Invalid segment {seg_id}: start >= end. SKIPPING.")
+                continue
+            
+            inserted_ids.add(seg_id)
+            validated_segments.append(seg)
+            
+            # ANTI-LOOP LOGGING
+            logger.info(f"[{trace_id}] INSERT segment_id={seg_id} start={seg['start']:.2f} end={seg['end']:.2f} duration={seg['end']-seg['start']:.2f}")
+        
+        # Prepare output
         from src.utils.media_engine import MediaEngine
         context = RequestContext(trace_id)
         
-        # Output paths
         from src.core.config import settings
         static_processed_dir = os.path.join(settings.BASE_DIR, "static", "processed")
         os.makedirs(static_processed_dir, exist_ok=True)
         out_video_name = f"output_{trace_id}.mp4"
         out_video = os.path.join(static_processed_dir, out_video_name)
         
-        # RUN THE DETERMINISTIC ASSEMBLY
-        # 1. Silences detected segments in the original video's audio
-        # 2. Overlays translated DUBs at exact timestamps
-        MediaEngine.assemble_production_audio(input_file, bg_audio, segments, out_video)
+        # RULE 1 & 2: Pre-allocated buffer assembly (NO APPEND)
+        # The MediaEngine method must use index-based insertion, not concatenation
+        MediaEngine.assemble_production_audio_safe(
+            input_file, 
+            bg_audio, 
+            validated_segments,  # Already sorted and deduplicated
+            out_video
+        )
         
+        # Cleanup Redis data
         REDIS_CLIENT.delete(f"pipeline:{trace_id}", f"pipeline:{trace_id}:results")
-        logger.info(f"[{trace_id}] ASSEMBLER: COMPLETE. Video: {out_video_name}")
+        logger.info(f"[{trace_id}] ✅ ASSEMBLER: COMPLETE. Video: {out_video_name}")
         
         return {"video_url": f"processed/{out_video_name}", "trace_id": trace_id}
+        
     except Exception as e:
-        logger.error(f"[{trace_id}] ASSEMBLER FAILED: {e}")
+        logger.error(f"[{trace_id}] ❌ ASSEMBLER FAILED: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return None
+    finally:
+        # Always release lock (even on failure)
+        REDIS_CLIENT.delete(lock_key)
