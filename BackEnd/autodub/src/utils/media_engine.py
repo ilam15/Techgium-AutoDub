@@ -335,14 +335,15 @@ class MediaEngine:
         active_boost = 1.5
         filter_parts.append(f"{''.join(mix_labels)}amix=inputs={num_segs}:normalize=0:dropout_transition=0,volume={active_boost}[dialogue]")
         
-        # Sidechain Ducking (PRECISE PASS)
-        # Background remains 1.0 (original) but ducks smoothly to 0.4x when dialogue is active.
+        # Sidechain Ducking (AGGRESSIVE PASS)
+        # Background remains 1.0 (original) but ducks HEAVILY to -20dB (approx 0.1x) when dialogue is active.
+        # This prevents the source language leakage in the background from being heard.
         filter_parts.append("[dialogue]asplit[v_mix][v_side]")
-        filter_parts.append("[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=2.5:release=500:attack=10[bg_ducked]")
+        filter_parts.append("[bg_vol][v_side]sidechaincompress=threshold=0.1:ratio=5.0:release=700:attack=5[bg_ducked]")
         
         # Final Mix: Use normalization=1 for the two full-length tracks (Dialogue + Background)
-        # We multiply by 2 to counteract the 1/2 reduction from amix's default normalization.
-        filter_parts.append("[v_mix][bg_ducked]amix=inputs=2:dropout_transition=0:duration=longest,volume=2[aout]")
+        # We add a limiter at the end to prevent clipping since we've boosted volumes.
+        filter_parts.append("[v_mix][bg_ducked]amix=inputs=2:dropout_transition=0:duration=longest,volume=2,alimiter=limit=0.9[aout]")
 
         filter_script_path = os.path.join(os.path.dirname(output_path), f"filter_{uuid.uuid4().hex[:8]}.txt")
         with open(filter_script_path, "w", encoding="utf-8") as f:
@@ -446,6 +447,100 @@ class MediaEngine:
                 return file_path
         
         return file_path
+
+    @classmethod
+    def assemble_production_audio(cls, video_path: str, background_audio_path: str, segments: list, output_path: str):
+        """
+        DETERMINISTIC ASSEMBLER (Rule-Compliant):
+        1. Silences original audio ranges where speech was detected.
+        2. Overlays DUB audio at exact timestamps.
+        3. Ensures zero leakage of source language.
+        """
+        if not segments:
+            logger.warning("No segments found for production assembly. Stream-copying original.")
+            return cls.merge_audio_video(video_path, background_audio_path or "", output_path)
+
+        # 1. Get Meta
+        probe = cls.get_probe_info(video_path)
+        video_dur = float(probe['format']['duration'])
+
+        # 2. Build Filter Script
+        filter_parts = []
+        
+        # Step A: Silence the original audio [0:a]
+        # We apply a volume=0 filter for every segment detected.
+        mute_filters = []
+        for seg in segments:
+            mute_filters.append(f"volume=0:enable='between(t,{seg['start']},{seg['end']})'")
+        
+        # Chain all mutes
+        filter_parts.append(f"[0:a]{','.join(mute_filters)}[main_silenced]")
+        
+        # Step B: Prepare Dubs for Overlay [2:a] onwards
+        # If background exists, [1:a] is background, else silent base
+        # But per USER RULE: Original audio must be silenced, then DUBs inserted.
+        # We'll mix 'main_silenced' with 'background' (if any) and all 'dubs'.
+        
+        mix_inputs = ["[main_silenced]"]
+        if background_audio_path and os.path.exists(background_audio_path):
+             filter_parts.append("[1:a]volume=1.0[bg_clean]")
+             mix_inputs.append("[bg_clean]")
+        
+        dub_count = 0
+        for i, seg in enumerate(segments):
+            if seg.get("action") == "TRANSLATE" and seg.get("dub_audio_path") and os.path.exists(seg["dub_audio_path"]):
+                in_idx = i + (2 if background_audio_path else 1)
+                label = f"dub{i}"
+                delay_ms = int(seg["start"] * 1000)
+                # Ensure 2-channel for mixing
+                filter_parts.append(f"[{in_idx}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+                mix_inputs.append(f"[{label}]")
+                dub_count += 1
+                
+        # Step C: Final Mix (Deterministic Sum)
+        num_inputs = len(mix_inputs)
+        # Using dropout_transition=0 and normalize=0 for absolute level control
+        filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={num_inputs}:normalize=0:dropout_transition=0,volume={min(num_inputs, 2.0)}[aout]")
+
+        filter_script_path = os.path.join(os.path.dirname(output_path), f"prod_mix_{uuid.uuid4().hex[:8]}.txt")
+        with open(filter_script_path, "w", encoding="utf-8") as f:
+            f.write(";\n".join(filter_parts))
+
+        # 3. Command Assembly
+        cmd = [cls.FFMPEG_PATH, "-y", "-hide_banner", "-loglevel", "error"]
+        cmd.extend(["-i", video_path]) # Input 0
+        
+        if background_audio_path and os.path.exists(background_audio_path):
+            cmd.extend(["-i", background_audio_path]) # Input 1
+        
+        for seg in segments:
+            # We must include the path even if it's a KEEP segment to keep input indexing stable for the script,
+            # or we filter the segments list before building the command.
+            # Filtering is cleaner for memory/handles.
+            if seg.get("action") == "TRANSLATE" and seg.get("dub_audio_path") and os.path.exists(seg["dub_audio_path"]):
+                cmd.extend(["-i", seg["dub_audio_path"]])
+
+        cmd.extend([
+            "-filter_complex_script", filter_script_path,
+            "-map", "0:v:0",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-t", str(video_dur),
+            "-movflags", "+faststart",
+            os.path.abspath(output_path)
+        ])
+
+        try:
+            logger.info(f"🚀 PRODUCTION ASSEMBLY: Silencing {len(segments)} segments & inserting {dub_count} dubs...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                 raise RuntimeError(f"FFmpeg production assembly failed: {result.stderr}")
+        finally:
+            if os.path.exists(filter_script_path):
+                os.remove(filter_script_path)
+
+        return cls.stabilize_media(output_path)
 
     @classmethod
     def get_probe_info(cls, file_path: str) -> dict:

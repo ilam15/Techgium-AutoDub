@@ -28,43 +28,53 @@ def save_processed_file(file_name, temp_folder, save_at, source_path, file_type)
 
 def separate_audio(source_path):
     try:
+        from src.app import model_manager
+        
         save_at = os.path.join(settings.BASE_DIR, "audio_data")
         os.makedirs(save_at, exist_ok=True)
 
-        # Use a local temporary folder to avoid conflicts
-        temp_folder = os.path.join(settings.TEMP_DIR, "audio_separate")
-        if os.path.exists(temp_folder):
-            shutil.rmtree(temp_folder)
-
+        # Use a unique temporary folder per request to avoid race conditions in parallel mode
+        import uuid
+        unique_id = uuid.uuid4().hex[:8]
+        temp_folder = os.path.join(settings.TEMP_DIR, f"audio_separate_{unique_id}")
         os.makedirs(temp_folder, exist_ok=True)
 
-        # Check if audio-separator is available in current venv
-        import sys
-        python_exe = sys.executable
+        logger.info(f"Refactored: Starting Native Separation for {source_path}")
         
-        # Run the audio separator command using current python context
-        command = f'"{python_exe}" -m audio_separator.utils.cli "{source_path}" --model_filename UVR-MDX-NET-Inst_HQ_3.onnx --output_dir "{temp_folder}"'
-        logger.info(f"Running separation (in-venv): {command}")
+        # Initialize the native separator via Singleton (Saves RAM/OOM)
+        separator = model_manager.get_separator()
+        separator.output_dir = temp_folder # Redirect output for this task
         
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        # Load the specific model
+        model_name = "UVR-MDX-NET-Inst_HQ_3.onnx"
+        logger.info(f"Loading model: {model_name}")
+        separator.load_model(model_name)
+        
+        # Perform separation
+        output_files = separator.separate(source_path)
+        logger.info(f"Native separation finished. Produced: {output_files}")
+        
         vocal_path, noise_path = None, None
 
-        if result.returncode == 0:  # Check if the command was successful
-            for file_name in os.listdir(temp_folder):
-                file_name_lower = file_name.lower()
-                if "instrumental" in file_name_lower or "(instrumental)" in file_name_lower:
-                    noise_path = save_processed_file(file_name, temp_folder, save_at, source_path, "noise")
+        # The 'separate' method returns a list of produced filenames (not full paths)
+        for file_name in output_files:
+            file_name_lower = file_name.lower()
+            if "instrumental" in file_name_lower or "(instrumental)" in file_name_lower:
+                noise_path = save_processed_file(file_name, temp_folder, save_at, source_path, "noise")
 
-                if "vocals" in file_name_lower or "(vocals)" in file_name_lower:
-                    vocal_path = save_processed_file(file_name, temp_folder, save_at, source_path, "vocals")
+            if "vocals" in file_name_lower or "(vocals)" in file_name_lower:
+                vocal_path = save_processed_file(file_name, temp_folder, save_at, source_path, "vocals")
 
-            # Clean up temporary folder after processing
+        # Cleanup
+        try:
             shutil.rmtree(temp_folder)
-        else:
-            logger.error(f"Audio separation failed: {result.stderr}")
+        except:
+            pass
 
         return vocal_path, noise_path
 
     except Exception as e:
-        logger.error(f"An error occurred during separation: {e}")
+        logger.error(f"Native separation failed with exception: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None, None

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DEVICE: str = "cuda" if (os.environ.get("USE_GPU", "true").lower() == "true" and torch.cuda.is_available()) else "cpu"
     
     # Point 3: Whisper Optimization & Configuration
-    WHISPER_MODEL_SIZE: str = "tiny" # Changed to tiny for maximum speed on CPU
+    WHISPER_MODEL_SIZE: str = "base" # Changed to base for better language detection accuracy
     @property
     def WHISPER_MODEL_NAME(self) -> str:
         # Map size to specific model names if needed, or use directly
@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     MAX_VIDEO_DURATION: int = 3600 # 1 hour
     
     # Point 7 & 10: TTS & Audio Settings
-    TTS_SPEED_CAP: float = 1.4      # Max speedup ratio
-    TTS_SLOW_DOWN_CAP: float = 0.85 # Min speed ratio
+    # Increased speed range to handle fast speakers and prevent overlaps
+    TTS_SPEED_CAP: float = 1.7      # Max speedup ratio
+    TTS_SLOW_DOWN_CAP: float = 0.70 # Min speed ratio
     
     # Point 6: Probing Settings
     PROBE_WINDOW_SHORT: int = 5     # For duration < 60s

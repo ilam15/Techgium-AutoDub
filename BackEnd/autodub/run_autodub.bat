@@ -61,7 +61,7 @@ start "AutoDub_API" cmd /k "title API_SERVER && cd /d %BASE_DIR% && %PYTHON_EXE%
 :: 6. Launch Terminal 1: Separation & Segmentation
 echo [TERMINAL 1] Launching Separation Worker...
 :: T1 stays 'solo' for process isolation
-start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q separation -P solo"
+start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q separation -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
 
 :: Launch Terminal 2: Analysis & Translation
 echo [TERMINAL 2] Launching Analysis Worker (Parallel Burst)...

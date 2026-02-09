@@ -2,6 +2,7 @@ import torch
 import gc
 import time
 import threading
+import os
 from faster_whisper import WhisperModel
 from src.core.config import settings
 from src.core.logger import logger
@@ -116,6 +117,27 @@ class ModelManager:
                         raise e
             self._last_used["translator"] = time.time()
             return self._models["translator"]
+
+    def get_separator(self):
+        """Native Singleton for Audio Separation to avoid OOM in parallel Mode."""
+        from audio_separator.separator import Separator
+        if "separator" in self._models:
+            self.heartbeat("separator")
+            return self._models["separator"]
+        
+        with self._lock:
+            if "separator" not in self._models:
+                logger.info("Initializing Audio Separator Model (Singleton)...")
+                # Ensure model cache is local to project on Windows
+                model_dir = os.path.join(settings.BASE_DIR, "models", "audio_separator")
+                os.makedirs(model_dir, exist_ok=True)
+                
+                self._models["separator"] = Separator(
+                    model_file_dir=model_dir,
+                    output_format="wav"
+                )
+            self._last_used["separator"] = time.time()
+            return self._models["separator"]
 
     def _cleanup_loop(self):
         while True:
