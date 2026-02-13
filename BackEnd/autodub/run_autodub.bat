@@ -56,21 +56,21 @@ if %errorlevel% neq 0 (
 
 :: 5. Start API Server
 echo [API] Launching FastAPI...
-start "AutoDub_API" cmd /k "title API_SERVER && cd /d %BASE_DIR% && %PYTHON_EXE% -m src.main"
+start "AutoDub_API" cmd /k "title API_SERVER && cd /d "%BASE_DIR%" && "%PYTHON_EXE%" -m src.main"
 
 :: 6. Launch Terminal 1: Separation & Segmentation
 echo [TERMINAL 1] Launching Separation Worker...
 :: T1 stays 'solo' for process isolation
-start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q separation -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
+start "AutoDub_Separation_Worker" cmd /k "title SEPARATION_WORKER && cd /d "%BASE_DIR%" && "%CELERY_EXE%" -A src.core.celery_app worker --loglevel=info -Q separation -P threads --concurrency=1 -Ofair --prefetch-multiplier=1"
 
 :: Launch Terminal 2: Analysis & Translation
-echo [TERMINAL 2] Launching Analysis Worker (Parallel Burst)...
+echo [TERMINAL 2] Launching Analysis Worker (Single Threaded for NLLB Stability)...
 :: -Ofair + prefetch=1 ensures tasks are not hogged by one thread
-start "AutoDub_Analysis_Worker" cmd /k "title ANALYSIS_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q analysis -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
+start "AutoDub_Analysis_Worker" cmd /k "title ANALYSIS_WORKER && cd /d "%BASE_DIR%" && "%CELERY_EXE%" -A src.core.celery_app worker --loglevel=info -Q analysis -P threads --concurrency=1 -Ofair --prefetch-multiplier=1"
 
 :: Launch Terminal 3: Synthesis & Merge
-echo [TERMINAL 3] Launching Merge Worker (Parallel Burst)...
-start "AutoDub_Merge_Worker" cmd /k "title MERGE_WORKER && cd /d %BASE_DIR% && %CELERY_EXE% -A src.core.celery_app worker --loglevel=info -Q merge -P threads --concurrency=10 -Ofair --prefetch-multiplier=1"
+echo [TERMINAL 3] Launching Merge Worker (Single Threaded for TTS Stability)...
+start "AutoDub_Merge_Worker" cmd /k "title MERGE_WORKER && cd /d "%BASE_DIR%" && "%CELERY_EXE%" -A src.core.celery_app worker --loglevel=info -Q merge -P threads --concurrency=1 -Ofair --prefetch-multiplier=1"
 
 echo ======================================================
 echo [OK] 3-Terminal Parallel Pipeline Launched!

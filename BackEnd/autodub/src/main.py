@@ -8,6 +8,12 @@ import time
 import os
 import subprocess
 import threading
+import asyncio
+
+# Fix for Windows asyncio loop error: [WinError 10054] An existing connection was forcibly closed
+# Use SelectorEventLoop instead of ProactorEventLoop (default on Py3.8+)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from src.core.config import settings
 from src.core.logger import logger

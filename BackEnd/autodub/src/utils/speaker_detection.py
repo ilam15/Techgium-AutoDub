@@ -13,8 +13,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*torchcodec.*")
 
 # from transformers import pipeline (Moved inside class for robustness)
-from pyannote.audio import Pipeline
+from src.core.config import settings
 import json
+import src.config_constants as config
 
 class SpeakerAnalyzer:
     def __init__(self, hf_token=None):
@@ -23,9 +24,31 @@ class SpeakerAnalyzer:
         self.diarization_pipeline = None
         self.gender_pipeline = None
         self.device = 0 if torch.cuda.is_available() else -1
-        self.load_models()
         
+        # Check global flag first
+        if settings.ENABLE_GENDER_DETECTION:
+             self.load_models()
+        else:
+             print("⚠️ Gender Detection DISABLED in config. Skipping model load.")
+
     def load_models(self):
+        if not config.ENABLE_TORCHCODEC:
+             print("INFO: TorchCodec disabled via config. Skipping Pyannote full pipeline if it depends on it.")
+             # We still try to load Pyannote unless we know for sure it crashes
+             pass
+
+        # Lazy Import to prevent libtorchcodec crash on module load
+        try:
+             from pyannote.audio import Pipeline
+        except ImportError as e:
+             if not config.ENABLE_TORCHCODEC:
+                 print(f"⚠️ Pyannote Import Failed (likely torchcodec), but ENABLE_TORCHCODEC=False. Continuing.")
+             else:
+                 print(f"❌ Pyannote Import Failed (libtorchcodec issue?): {e}")
+             return
+        except Exception as e:
+             print(f"❌ Pyannote Import Error: {e}")
+             return
         # Diagnostic logging (Safe)
         if self.hf_token:
             token_display = f"{self.hf_token[:4]}...{self.hf_token[-4:]}"
@@ -187,6 +210,7 @@ class SpeakerAnalyzer:
         Higher pitch (F0 > 165Hz) is usually Female, lower is Male.
         """
         try:
+            # Lazy import pydub to handle FFmpeg checks
             from pydub import AudioSegment
             audio = AudioSegment.from_file(audio_path)
             # Optimize: Limit analysis to max 2 seconds to speed up pyin
@@ -234,8 +258,14 @@ class SpeakerAnalyzer:
                 
             return "Male" # Final default
         except Exception as e:
-            print(f"Segment gender detection failed: {e}")
-            return "Male"
+            err_str = str(e)
+            if "torchcodec" in err_str or not config.ENABLE_TORCHCODEC:
+                # Suppress noisy torchcodec error as requested
+                pass 
+            else:
+                print(f"Segment gender detection failed: {e}")
+            return "Unknown"
+
 
     def _identify_speaker_genders(self, audio_path_or_data, turns):
         if not self.gender_pipeline:

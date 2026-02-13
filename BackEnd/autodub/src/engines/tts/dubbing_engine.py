@@ -55,10 +55,13 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
     # Gender-based voice selection for Kokoro
     if tts_model == "Kokoro TTS":
         # If the user-provided voice doesn't match the detected gender, switch it
-        if gender == "Female" and not voice_name.startswith("af_"):
+        # Default voices: af_heart (Female), am_adam (Male)
+        if gender.lower() == "female" and not voice_name.startswith("af_"):
             voice_name = "af_heart"
-        elif gender == "Male" and not voice_name.startswith("am_"):
+        elif gender.lower() == "male" and not voice_name.startswith("am_"):
             voice_name = "am_adam"
+        
+        logger.info(f"🎤 TTS Voice Selection: Gender={gender}, Voice={voice_name}")
 
     # 2. Initial Generation
     if tts_model == "Kokoro TTS":

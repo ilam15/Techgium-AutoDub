@@ -143,7 +143,7 @@ class MediaEngine:
         return cls.stabilize_media(output_path)
 
     @classmethod
-    def extract_audio(cls, video_path: str, output_audio_path: str):
+    def extract_audio(cls, video_path: str, output_audio_path: str, sr: int = 16000):
         """
         Extracts audio from video file.
         """
@@ -152,7 +152,7 @@ class MediaEngine:
             "-i", video_path,
             "-vn",  # No video
             "-acodec", "pcm_s16le",  # WAV format
-            "-ar", "16000",  # Sample rate
+            "-ar", str(sr),  # Sample rate
             "-ac", "1",  # Mono
             output_audio_path
         ]
@@ -491,12 +491,12 @@ class MediaEngine:
         video_duration = float(probe['format']['duration'])
         sample_rate = 44100  # High-quality sample rate for final output
         
-        # RULE 1: PRE-ALLOCATE AUDIO BUFFER (Full Duration, Silent)
-        total_samples = int(video_duration * sample_rate)
-        final_audio = np.zeros(total_samples, dtype=np.float32)
-        logger.info(f"✅ Pre-allocated silent buffer: {video_duration:.2f}s ({total_samples} samples)")
+        # RULE 1: BASE LAYER = ORIGINAL AUDIO (Preserves ambient/music in gaps)
+        # Extract original audio first to use as the base canvas
+        original_audio_path = os.path.join(os.path.dirname(output_path), f"original_audio_{uuid.uuid4().hex[:8]}.wav")
+        cls.extract_audio(video_path, original_audio_path, sr=sample_rate)
         
-        # Helper: Fast resample using FFmpeg (much faster than librosa)
+        # Helper: Fast resample using FFmpeg
         def fast_resample(audio_path, target_sr=16000):
             temp_out = audio_path.replace('.wav', f'_resampled_{target_sr}.wav')
             cmd = [
@@ -508,50 +508,53 @@ class MediaEngine:
             ]
             subprocess.run(cmd, check=True)
             audio, sr = sf.read(temp_out)
-            os.remove(temp_out)
+            try: os.remove(temp_out) 
+            except: pass
             return audio, sr
+
+        # Load Base Original Audio
+        original_audio, orig_sr = sf.read(original_audio_path)
+        if orig_sr != sample_rate:
+            original_audio, orig_sr = fast_resample(original_audio_path, sample_rate)
+            
+        if len(original_audio.shape) > 1:
+            original_audio = original_audio.mean(axis=1)
+            
+        total_samples = int(video_duration * sample_rate)
         
-        # Load background audio if available
+        # Ensure exact duration match
+        if len(original_audio) > total_samples:
+            original_audio = original_audio[:total_samples]
+        elif len(original_audio) < total_samples:
+            original_audio = np.pad(original_audio, (0, total_samples - len(original_audio)))
+            
+        # Initialize final_audio with ORIGINAL (Seamless Gaps)
+        final_audio = original_audio.copy()
+        logger.info(f"✅ Canvas initialized with Original Audio ({video_duration:.2f}s)")
+        
+        # Load Background Track (if available) for mixing into Dubs
+        bg_audio_track = None
         if background_audio_path and os.path.exists(background_audio_path):
             try:
                 bg_audio, bg_sr = sf.read(background_audio_path)
                 if bg_sr != sample_rate:
                     bg_audio, bg_sr = fast_resample(background_audio_path, sample_rate)
                 
-                # Ensure mono
                 if len(bg_audio.shape) > 1:
                     bg_audio = bg_audio.mean(axis=1)
                 
-                # Trim or pad to match duration
+                # Align BG to master timeline
                 if len(bg_audio) > total_samples:
                     bg_audio = bg_audio[:total_samples]
                 elif len(bg_audio) < total_samples:
                     bg_audio = np.pad(bg_audio, (0, total_samples - len(bg_audio)))
-                
-                # RULE 2: INDEX-BASED INSERTION (not append)
-                final_audio[:] = bg_audio * 0.5  # Background at 50% volume
-                logger.info(f"✅ Background audio inserted (50% volume)")
+                    
+                bg_audio_track = bg_audio
+                logger.info(f"✅ Background track loaded for mixing")
             except Exception as e:
-                logger.warning(f"Background audio failed: {e}")
-        
-        # Extract original audio for KEEP segments (once, reuse for all)
-        original_audio_path = os.path.join(os.path.dirname(output_path), f"original_audio_{uuid.uuid4().hex[:8]}.wav")
-        cls.extract_audio(video_path, original_audio_path)
-        
-        original_audio, orig_sr = sf.read(original_audio_path)
-        if orig_sr != sample_rate:
-            original_audio, orig_sr = fast_resample(original_audio_path, sample_rate)
-        
-        if len(original_audio.shape) > 1:
-            original_audio = original_audio.mean(axis=1)
-        
-        # Ensure original audio matches duration
-        if len(original_audio) > total_samples:
-            original_audio = original_audio[:total_samples]
-        elif len(original_audio) < total_samples:
-            original_audio = np.pad(original_audio, (0, total_samples - len(original_audio)))
-        
-        # Pre-load librosa ONCE (not per segment)
+                logger.warning(f"Background audio failed to load: {e}")
+
+        # Pre-load librosa ONCE
         try:
             import librosa
             librosa_available = True
@@ -559,25 +562,28 @@ class MediaEngine:
             librosa_available = False
             logger.warning("librosa not available, time-stretching disabled")
         
-        # Process each segment (already sorted and deduplicated)
+        # Process Segments
         for seg in segments:
             seg_id = seg['id']
             start_time = seg['start']
             end_time = seg['end']
             action = seg.get('action', 'KEEP')
             
-            # Calculate sample indices
+            # Skip KEEP actions (Base is already Original)
+            if action == "KEEP":
+                continue
+                
+            # Calculations
             start_sample = int(start_time * sample_rate)
             end_sample = int(end_time * sample_rate)
             segment_duration_samples = end_sample - start_sample
             
             # Bounds check
             if start_sample < 0 or end_sample > total_samples or start_sample >= end_sample:
-                logger.error(f"❌ Segment {seg_id} out of bounds. SKIPPING.")
                 continue
             
-            if action == "TRANSLATE" and seg.get("dub_audio_path") and os.path.exists(seg["dub_audio_path"]):
-                # Load dubbed audio
+            # Handle TRANSLATE
+            if seg.get("dub_audio_path") and os.path.exists(seg["dub_audio_path"]):
                 try:
                     dub_audio, dub_sr = sf.read(seg["dub_audio_path"])
                     
@@ -587,31 +593,44 @@ class MediaEngine:
                     if len(dub_audio.shape) > 1:
                         dub_audio = dub_audio.mean(axis=1)
                     
-                    # DURATION VALIDATION & CORRECTION
-                    dub_duration_samples = len(dub_audio)
-                    
-                    if dub_duration_samples > segment_duration_samples:
-                        # Stretch to fit (time-stretch)
+                    # Duration Match
+                    dub_len = len(dub_audio)
+                    if dub_len > segment_duration_samples:
+                        # Stretch/Trim
                         if librosa_available:
-                            stretch_factor = segment_duration_samples / dub_duration_samples
-                            dub_audio = librosa.effects.time_stretch(dub_audio, rate=1/stretch_factor)
-                        dub_audio = dub_audio[:segment_duration_samples]  # Ensure exact fit
-                    elif dub_duration_samples < segment_duration_samples:
-                        # Pad with silence
-                        dub_audio = np.pad(dub_audio, (0, segment_duration_samples - dub_duration_samples))
+                            stretch = segment_duration_samples / dub_len
+                            dub_audio = librosa.effects.time_stretch(dub_audio, rate=1/stretch)
+                        dub_audio = dub_audio[:segment_duration_samples]
+                    elif dub_len < segment_duration_samples:
+                         dub_audio = np.pad(dub_audio, (0, segment_duration_samples - dub_len))
                     
-                    # RULE 2: INDEX-BASED INSERTION (NO APPEND)
-                    final_audio[start_sample:end_sample] = dub_audio[:segment_duration_samples]
-                    logger.info(f"✅ INSERTED DUB segment {seg_id} at [{start_time:.2f}s - {end_time:.2f}s]")
+                    # Mixing: Dub + Background (Replace Original Speech)
+                    segment_mix = dub_audio
+                    
+                    # Add background if we have it (otherwise we lose BG here, sadly)
+                    if bg_audio_track is not None:
+                        bg_slice = bg_audio_track[start_sample:end_sample]
+                        # Ensure slice length match (numpy safe)
+                        if len(bg_slice) == len(segment_mix):
+                             segment_mix = segment_mix + (bg_slice * 0.6) # 0.6 BG volume
+                    
+                    # Soften Edges (De-click 50ms)
+                    fade_len = min(int(0.05 * sample_rate), len(segment_mix) // 2)
+                    if fade_len > 0:
+                        fade_in = np.linspace(0, 1, fade_len)
+                        fade_out = np.linspace(1, 0, fade_len)
+                        segment_mix[:fade_len] *= fade_in
+                        segment_mix[-fade_len:] *= fade_out
+                        
+                    # INSERT (Overwrite Original)
+                    final_audio[start_sample:end_sample] = segment_mix
+                    logger.info(f"✅ INSERT DUB (w/ Mix) {seg_id} [{start_time:.2f}-{end_time:.2f}]")
                     
                 except Exception as e:
-                    logger.error(f"❌ Failed to insert dub for segment {seg_id}: {e}. Using KEEP.")
-                    # Fallback to KEEP
-                    final_audio[start_sample:end_sample] = original_audio[start_sample:end_sample]
+                    logger.error(f"❌ Failed dub {seg_id}: {e}. Keeping Original.")
             else:
-                # KEEP: Use original audio
-                final_audio[start_sample:end_sample] = original_audio[start_sample:end_sample]
-                logger.info(f"✅ KEPT ORIGINAL segment {seg_id} at [{start_time:.2f}s - {end_time:.2f}s]")
+                 # Dub missing -> Keep Original
+                 pass
         
         
         # Normalize audio to prevent it from being too quiet
@@ -638,7 +657,7 @@ class MediaEngine:
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-c:v", "copy",  # No video re-encoding
-            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # Audio normalization for consistent volume
+            # "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # REMOVED: Can cause silence on Windows/short clips
             "-c:a", "aac",
             "-b:a", "192k",  # Higher bitrate for better quality
             os.path.abspath(output_path)
