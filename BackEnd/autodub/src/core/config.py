@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = "../.env" # Look in parent directory (because user kept it outside 'autodub')
+        extra = "ignore"  # Allow extra fields in .env without crashing
 
 settings = Settings()
 

@@ -23,9 +23,11 @@ class TranslationService:
 
     def translate_batches(self, subtitles, src_name: str, dst_name: str):
         """
-        Translates subtitles using the local NLLB model with exhaustive logging.
+        Robust Translation Pipeline: 
+        1. Sarvam AI (Indian Languages + English)
+        2. Local NLLB Model (Offline / General)
+        3. Google Translate (Final Fallback)
         """
-        # Imports needed early for language dict lookup
         from src.utils.utils import language_dict
         import re
 
@@ -40,97 +42,123 @@ class TranslationService:
         
         src_meta = src_info.get("meta_code")
         dst_meta = dst_info.get("meta_code")
+        s_code = src_info.get("lang_code", "")
+        t_code = dst_info.get("lang_code", "")
 
-        logger.info(f"TRANSLATE_SERVICE: {src_name} ({src_meta}) -> {dst_name} ({dst_meta})")
+        logger.info(f"TRANSLATE_SERVICE: {src_name} ({s_code}) -> {dst_name} ({t_code})")
 
-        if src_name.lower() == dst_name.lower() or not src_meta or not dst_meta:
-            if src_name.lower() == dst_name.lower():
-                logger.info("Skipping translation: Source and Target match.")
-            else:
-                logger.warning(f"NLLB codes missing for {src_name}->{dst_name}. Falling back.")
-            
-            # Fallback to existing logic
-            results, full_text = translate_subtitle(subtitles, src_name, dst_name)
-            return results, full_text
-            
+        # Skip if languages are identical
+        if src_name.lower() == dst_name.lower() or (s_code and s_code == t_code):
+            logger.info("Skipping translation: Source and Target match.")
+            return subtitles, " ".join([s.text for s in subtitles])
+
         st = time.time()
         
-        # Check if Sarvam API Key is available
-        if not settings.SARVAM_API_KEY:
-            logger.warning("Sarvam API Key missing. Falling back to Google Translate.")
+        # ---------------------------------------------------------
+        # 1. SARVAM AI (Priority for Indian Languages)
+        # ---------------------------------------------------------
+        sarvam_supported = {
+            "bn", "hi", "gu", "kn", "ml", "mr", "or", "pa", "ta", "te", "en"
+        }
+        
+        if settings.SARVAM_API_KEY and s_code in sarvam_supported and t_code in sarvam_supported:
+            try:
+                sarvam_map = {
+                    "bn": "bn-IN", "hi": "hi-IN", "gu": "gu-IN", "kn": "kn-IN",
+                    "ml": "ml-IN", "mr": "mr-IN", "or": "od-IN", "pa": "pa-IN",
+                    "ta": "ta-IN", "te": "te-IN", "en": "en-IN"
+                }
+                src_lang_sarvam = sarvam_map.get(s_code, f"{s_code}-IN")
+                tgt_lang_sarvam = sarvam_map.get(t_code, f"{t_code}-IN")
+
+                # Shield speaker tags: <S:XX|G:XX> Text
+                shielded_texts = []
+                tags = []
+                for sub in subtitles:
+                    match = re.search(r'(<S:.*?\|G:(.*?)>)?(.*)', sub.text, re.DOTALL)
+                    tag = match.group(1) or ""
+                    gender_hint = match.group(2) or "Male"
+                    actual_text = match.group(3).strip()
+                    tags.append((tag, gender_hint))
+                    shielded_texts.append(actual_text)
+
+                logger.info(f"Sarvam AI translating {len(subtitles)} chunks...")
+                
+                def translate_single_sarvam(item):
+                    text, gender = item
+                    if not text.strip(): return ""
+                    url = "https://api.sarvam.ai/translate"
+                    payload = {
+                        "input": text,
+                        "source_language_code": src_lang_sarvam,
+                        "target_language_code": tgt_lang_sarvam,
+                        "speaker_gender": gender,
+                        "mode": "formal",
+                        "model": "mayura:v1",
+                        "enable_preprocessing": True
+                    }
+                    headers = {
+                        "Content-Type": "application/json", 
+                        "api-subscription-key": settings.SARVAM_API_KEY
+                    }
+                    # Add timeout to avoid hanging on DNS/Network issues
+                    response = requests.post(url, json=payload, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    return response.json().get("translated_text", "")
+
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    translations = list(executor.map(translate_single_sarvam, zip(shielded_texts, [t[1] for t in tags])))
+
+                full_text_list = []
+                for i, translated_txt in enumerate(translations):
+                    final_text = f"{tags[i][0]} {translated_txt}".strip() if tags[i][0] else translated_txt
+                    subtitles[i].text = final_text
+                    full_text_list.append(final_text)
+
+                self.context.add_metric("translation_sarvam", time.time() - st)
+                return subtitles, " ".join(full_text_list)
+
+            except Exception as e:
+                logger.warning(f"Sarvam AI failed ({e}). Falling back to Local NLLB.")
+
+        # ---------------------------------------------------------
+        # 2. LOCAL NLLB MODEL (The Reliable Offline Choice)
+        # ---------------------------------------------------------
+        if src_meta and dst_meta:
+            try:
+                from src.app import model_manager
+                
+                shielded_texts = []
+                tags = []
+                for sub in subtitles:
+                    match = re.search(r'(<S:.*?\|G:.*?>)?(.*)', sub.text, re.DOTALL)
+                    tag = match.group(1) or ""
+                    actual_text = match.group(2).strip()
+                    tags.append(tag)
+                    shielded_texts.append(actual_text)
+
+                logger.info(f"Local NLLB translating {len(subtitles)} chunks...")
+                translator = model_manager.get_translator()
+                translations = translator(shielded_texts, src_lang=src_meta, tgt_lang=dst_meta, max_length=512)
+                
+                full_text_list = []
+                for i, res in enumerate(translations):
+                    translated_txt = res['translation_text']
+                    final_text = f"{tags[i]} {translated_txt}".strip() if tags[i] else translated_txt
+                    subtitles[i].text = final_text
+                    full_text_list.append(final_text)
+
+                self.context.add_metric("translation_nllb", time.time() - st)
+                return subtitles, " ".join(full_text_list)
+            except Exception as e:
+                logger.error(f"Local NLLB failed ({e}). Falling back to Google.")
+
+        # ---------------------------------------------------------
+        # 3. GOOGLE TRANSLATE (The Universal Web Safety Net)
+        # ---------------------------------------------------------
+        try:
             results, full_text = translate_subtitle(subtitles, src_name, dst_name)
             return results, full_text
-
-        try:
-            # Map languages to Sarvam codes (xx-IN)
-            sarvam_map = {
-                "bn": "bn-IN", "hi": "hi-IN", "gu": "gu-IN", "kn": "kn-IN",
-                "ml": "ml-IN", "mr": "mr-IN", "or": "od-IN", "pa": "pa-IN",
-                "ta": "ta-IN", "te": "te-IN", "en": "en-IN"
-            }
-            
-            # Get base codes from language_dict
-            s_code = src_info.get("lang_code", "")
-            t_code = dst_info.get("lang_code", "")
-            
-            # Map to Sarvam format
-            src_lang_code = sarvam_map.get(s_code, s_code)
-            target_lang_code = sarvam_map.get(t_code, t_code)
-
-            # Shield speaker tags: <S:XX|G:XX> Text
-            shielded_texts = []
-            tags = []
-            for sub in subtitles:
-                match = re.search(r'(<S:.*?\|G:.*?>)?(.*)', sub.text, re.DOTALL)
-                tag = match.group(1) or ""
-                actual_text = match.group(2).strip()
-                tags.append(tag)
-                shielded_texts.append(actual_text)
-
-            logger.info(f"Sarvam AI translating {len(subtitles)} chunks ({src_lang_code} -> {target_lang_code})...")
-            
-            def translate_single(text):
-                if not text.strip(): return ""
-                url = "https://api.sarvam.ai/translate"
-                payload = {
-                    "input": text,
-                    "source_language_code": src_lang_code,
-                    "target_language_code": target_lang_code,
-                    "speaker_gender": "Male", # Default, can be improved to extract from tag
-                    "mode": "formal",
-                    "model": "mayura:v1",
-                    "enable_preprocessing": True
-                }
-                headers = {
-                    "Content-Type": "application/json", 
-                    "api-subscription-key": settings.SARVAM_API_KEY
-                }
-                response = requests.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                return response.json().get("translated_text", "")
-
-            # Parallel execution
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                translations = list(executor.map(translate_single, shielded_texts))
-
-            full_text_list = []
-            for i, translated_txt in enumerate(translations):
-                # Re-attach tag
-                final_text = f"{tags[i]} {translated_txt}".strip() if tags[i] else translated_txt
-                subtitles[i].text = final_text
-                full_text_list.append(final_text)
-                
-                if i == 0:
-                    logger.info(f"Translation Sample: '{shielded_texts[0][:40]}' -> '{translated_txt[:40]}'")
-
-            self.context.add_metric("translation_sarvam", time.time() - st)
-            return subtitles, " ".join(full_text_list)
-
         except Exception as e:
-            logger.error(f"Sarvam AI translation failed: {e}. Falling back to Google.")
-            try:
-                results, full_text = translate_subtitle(subtitles, src_name, dst_name)
-                return results, full_text
-            except Exception as e2:
-                logger.error(f"All translation engines failed: {e2}")
-                raise TranslationError(f"Translation pipeline failed: {e2}")
+            logger.error(f"All translation engines failed: {e}")
+            raise TranslationError(f"Translation pipeline failed: {e}")
