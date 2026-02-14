@@ -35,8 +35,7 @@ celery_app.conf.update(
     # Task Routes
     task_routes={
         "src.tasks.separation_task": {"queue": "separation"},
-        "src.tasks.analysis_task": {"queue": "analysis"},
-        "src.tasks.synthesis_task": {"queue": "merge"},
+        "src.tasks.segment_worker_task": {"queue": "analysis"},
         "src.tasks.merge_final_video_task": {"queue": "merge"},
     },
     
@@ -64,9 +63,9 @@ celery_app.conf.update(
 )
 
 # Windows Compatibility: Overwrite pool if running on Windows
-if os.name == 'nt':
-    celery_app.conf.update(
-        worker_pool='solo',
-        worker_concurrency=1
-    )
-
+# COMMENTED OUT to allow CLI (run_autodub.bat) to control pool/concurrency
+# if os.name == 'nt':
+#     celery_app.conf.update(
+#         worker_pool='solo',
+#         worker_concurrency=1
+#     )

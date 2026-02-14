@@ -6,11 +6,9 @@ import uuid
 import json
 import torch
 import shutil
-import asyncio
 
 from src.core.config import settings
 from src.core.logger import logger
-from src.main_pipeline import ProductionPipeline
 from src.utils.clean_up import cleanup_all_temporary_files
 from src.utils.media_engine import MediaEngine
 from src.services.youtube_downloader import YouTubeDownloader
@@ -23,7 +21,13 @@ from src.core.context import RequestContext
 router = APIRouter()
 
 # ---------------- YouTube Setup ----------------
-youtube_dl = YouTubeDownloader(download_dir=os.path.join(settings.TEMP_DIR, "downloads"))
+# Use a static location for downloads so they can be served or inspected easily
+DOWNLOAD_DIR = os.path.join(settings.BASE_DIR, "static", "downloads")
+UPLOAD_DIR = os.path.join(settings.BASE_DIR, "static", "uploads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+youtube_dl = YouTubeDownloader(download_dir=DOWNLOAD_DIR)
 
 class YouTubeInfoRequest(BaseModel):
     url: str
@@ -36,11 +40,11 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     progress: Optional[float] = 0
+    stage: Optional[str] = "Pending"
     result: Optional[dict] = None
     error: Optional[str] = None
 
 # ---------------- Concurrency Controls ----------------
-_active_requests = asyncio.Semaphore(10) # Increased for async
 _max_video_duration = 3600 # 1 hour
 
 # ======================================================
@@ -71,6 +75,8 @@ async def dub_video(
             known_langs = []
 
         # ---------- Input Source ----------
+        local_input = None
+
         if youtube_url:
             try:
                 logger.info(f"Downloading YouTube video: {youtube_url} (Trace: {trace_id})")
@@ -91,8 +97,11 @@ async def dub_video(
             # Check for empty file
             if file.filename == "":
                 raise HTTPException(status_code=400, detail="No file uploaded")
-                
-            local_input = context.get_path(file.filename)
+            
+            # Save to static/uploads for persistence/accessibility
+            safe_filename = f"upload_{trace_id}_{file.filename}"
+            local_input = os.path.join(UPLOAD_DIR, safe_filename)
+            
             with open(local_input, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
@@ -104,13 +113,17 @@ async def dub_video(
         # ---------- Duration Check ----------
         try:
             probe = MediaEngine.get_probe_info(local_input)
+            if not probe:
+                 raise Exception("FFmpeg probe failed (no output)")
+            
             duration = float(probe.get("format", {}).get("duration", 0))
             if duration > _max_video_duration:
-                raise HTTPException(status_code=413, detail="Video too long")
+                raise HTTPException(status_code=413, detail=f"Video too long (Max {_max_video_duration}s)")
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Duration check skipped: {e}")
+            logger.error(f"Input verification failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid video file: {str(e)}")
 
         # ---------- Run Pipeline (Celery Async) ----------
         try:
@@ -169,6 +182,7 @@ async def download_youtube_video(request: YouTubeDownloadRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 @router.get("/task/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """
@@ -176,9 +190,9 @@ async def get_task_status(task_id: str):
     """
     from src.tasks import REDIS_CLIENT
     try:
+        # 1. Base status from Celery (AsyncResult is fast)
         result = AsyncResult(task_id, app=celery_app)
         
-        # 1. Base status from Celery
         response = {
             "task_id": task_id,
             "status": result.status,
@@ -193,7 +207,9 @@ async def get_task_status(task_id: str):
         if trace_id_bytes:
             trace_id = trace_id_bytes.decode()
             pipeline_data = REDIS_CLIENT.hgetall(f"pipeline:{trace_id}")
+            
             if pipeline_data:
+                # Progress Math
                 done = int(pipeline_data.get(b"segments_done", 0))
                 total = int(pipeline_data.get(b"total_segments", 0))
                 
@@ -202,12 +218,16 @@ async def get_task_status(task_id: str):
                     p = (done / total) * 100
                     response["progress"] = min(99, p)
                     response["stage"] = f"Dubbing Segments ({done}/{total})"
-
+                
+                # Check for input file to serve original URL if needed (optional)
+                input_file = pipeline_data.get(b"input_file", b"").decode()
+                
         # 3. Handle Lifecycle
         if result.status == 'PROGRESS':
             # Use T1 status if available
-            response["progress"] = max(response["progress"], result.info.get('progress', 0))
-            response["stage"] = result.info.get('stage', 'Segmenting Audio')
+            if isinstance(result.info, dict):
+                response["progress"] = max(response["progress"], result.info.get('progress', 0))
+                response["stage"] = result.info.get('stage', 'Segmenting Audio')
             
         elif result.status == 'SUCCESS':
             # Even if T1 (Celery) is SUCCESS, wait for T3 (Final Merge)
@@ -221,9 +241,22 @@ async def get_task_status(task_id: str):
                     response["status"] = "SUCCESS"
                     response["progress"] = 100
                     response["stage"] = "Completed"
+                    
+                    # Original Video URL
+                    # Input is typically in "static/downloads" or "static/uploads" now.
+                    # We can construct proper URL if we know the filename.
+                    original_url = ""
+                    if pipeline_data:
+                         input_file = pipeline_data.get(b"input_file", b"").decode()
+                         if "static" in input_file:
+                             # Extract relative path from static
+                             rel_path = input_file.split("static")[-1].replace("\\", "/")
+                             original_url = f"/static{rel_path}"
+
                     response["result"] = {
                         "video_url": f"/static/processed/{out_name}",
-                        "original_video_url": f"/static/{os.path.basename(result.result.get('input_file', ''))}" if result.result else ""
+                        "original_video_url": original_url,
+                        "trace_id": trace_id
                     }
                 else:
                     # Still merging...

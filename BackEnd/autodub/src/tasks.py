@@ -3,7 +3,7 @@ import shutil
 import time
 import json
 import uuid
-import re  # New import
+import re
 import soundfile as sf
 import torch
 import numpy as np
@@ -17,6 +17,7 @@ from src.core.context import RequestContext
 from src.core.config import settings
 import src.config_constants as config
 from src.models import model_manager
+from src.utils.lid import LanguageIdentifier, is_devanagari, contains_english_script
 
 # Redis connection for bookkeeping
 REDIS_CLIENT = redis.from_url(settings.CELERY_BROKER_URL)
@@ -24,14 +25,6 @@ REDIS_CLIENT = redis.from_url(settings.CELERY_BROKER_URL)
 # ==============================================================================
 # HELPER FUNCTIONS (Split Logic)
 # ==============================================================================
-
-def is_devanagari(text):
-    """Check if text contains Devanagari script (for Hindi/Marathi/etc)."""
-    return any('\u0900' <= c <= '\u097F' for c in text)
-
-def contains_english(text):
-    """Check for significant English content (words > 3 chars)."""
-    return bool(re.search(r'[a-zA-Z]{3,}', text))
 
 def prepare_audio(input_file: str, recover_bg: bool, trace_id: str) -> Tuple[Any, Any, Any]:
     """Extracts audio and optionally separates vocals/background."""
@@ -195,16 +188,23 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     processed_segments = clean_segments(raw_segments, trace_id)
     
     # Update count
-    REDIS_CLIENT.hset(pipeline_key, "total_segments", len(processed_segments))
+    total_segments = len(processed_segments)
+    REDIS_CLIENT.hset(pipeline_key, "total_segments", total_segments)
 
-    # 4. Dispatch with Chord
+    # 4. Dispatch with Manual Loop (One-by-One)
     if not processed_segments:
         logger.warning(f"[{trace_id}] No segments found. Triggering empty merge.")
-        merge_final_video_task.apply_async(args=[[], trace_id], queue='merge') # Pass empty list
+        merge_final_video_task.apply_async(args=[trace_id], queue='merge') # Pass just trace_id
         return {"total_segments": 0}
 
-    # Prepare signature group
-    tasks_group = []
+    # Initialize counter
+    REDIS_CLIENT.hset(pipeline_key, "completed_segments_count", 0)
+    # Clear old results
+    results_key = f"{pipeline_key}:results"
+    REDIS_CLIENT.delete(results_key)
+
+    logger.info(f"[{trace_id}] Dispatching {total_segments} tasks manually (One-by-One)")
+    
     for idx, seg in enumerate(processed_segments):
         seg_data = {
             "id": idx,
@@ -215,17 +215,13 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
             "trace_id": trace_id,
             "source_audio_path": source_audio_path
         }
-        # Create signature - Updated to pass src_lang
-        sig = segment_worker_task.s(seg_data, src_lang, dst_lang, gender).set(queue='analysis')
-        tasks_group.append(sig)
-
-    logger.info(f"[{trace_id}] Dispatching chord with {len(tasks_group)} tasks")
+        # Fire and Forget - "Send one by one"
+        segment_worker_task.apply_async(
+            args=[seg_data, src_lang, dst_lang, gender],
+            queue='analysis'
+        )
     
-    # Execute Chord: Group -> Merge
-    workflow = chord(tasks_group, merge_final_video_task.s(trace_id).set(queue='merge'))
-    workflow.apply_async()
-    
-    return {"total_segments": len(processed_segments)}
+    return {"total_segments": total_segments}
 
 # ==============================================================================
 # TERMINAL 2: SEGMENT WORKER
@@ -242,22 +238,34 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
     import langid
 
     # Audio Extraction
-    audio_chunk = MediaEngine.extract_pure_audio_numpy_segment(
-        segment["source_audio_path"],
-        segment["start"],
-        segment["duration"]
-    )
+    try:
+        audio_chunk = MediaEngine.extract_pure_audio_numpy_segment(
+            segment["source_audio_path"],
+            segment["start"],
+            segment["duration"]
+        )
+    except Exception as e:
+        logger.error(f"[{trace_id}] Audio extraction failed for segment {segment['id']}: {e}")
+        # Mark as error/keep
+        segment["action"] = "KEEP"
+        segment["error"] = str(e)
+        return _finalize_segment(trace_id, segment)
     
     # Models
-    whisper_model = model_manager.get_whisper()
-    active_beam = 5 if settings.DEVICE == "cuda" else 2
-    
-    # ASR
-    results, info = whisper_model.transcribe(audio_chunk, beam_size=active_beam, word_timestamps=True)
-    results = list(results)
-    
-    audio_lang = info.language
-    audio_conf = info.language_probability
+    try:
+        whisper_model = model_manager.get_whisper()
+        active_beam = 5 if settings.DEVICE == "cuda" else 2
+        
+        # ASR
+        results, info = whisper_model.transcribe(audio_chunk, beam_size=active_beam, word_timestamps=True)
+        results = list(results)
+        
+        audio_lang = info.language
+        audio_conf = info.language_probability
+    except Exception as e:
+        logger.error(f"[{trace_id}] ASR failed: {e}")
+        segment["action"] = "KEEP"
+        return _finalize_segment(trace_id, segment)
     
     # Filter
     valid_text_segments = []
@@ -279,37 +287,35 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
             if w.lower() != deduped[-1].lower(): deduped.append(w)
         asr_text = " ".join(deduped)
 
+    description = ""
+
     if not asr_text:
         segment["action"] = "KEEP"
         detected_lang_name = "UNKNOWN"
         target_lang_name = "UNKNOWN"
+        description = "No speech detected"
     else:
-        # Detect Lang - Using LOWER Threshold (0.50) to catch more valid detections
-        final_lang_code = audio_lang if audio_conf >= config.LANG_DETECT_AUDIO_THRESHOLD else "UNKNOWN"
-        if final_lang_code == "UNKNOWN":
-            try:
-                res_lang, res_prob = langid.classify(asr_text)
-                if res_prob >= 0.85: final_lang_code = res_lang
-            except: pass
-            
-        detected_lang_name = get_language_name(final_lang_code) if final_lang_code != "UNKNOWN" else "UNKNOWN"
+        # --- HYBRID LANGUAGE DETECTION ---
+        # Uses FastText + Whisper + Heuristics from src.utils.lid
+        detected_code, conf, method = LanguageIdentifier.identify(asr_text, audio_lang, audio_conf)
+        
+        detected_lang_name = get_language_name(detected_code) if detected_code != "unknown" else "UNKNOWN"
         target_lang_name = get_language_name(dst_lang) if len(dst_lang) <= 3 else dst_lang
         
         segment.update({
             "detected_lang": detected_lang_name,
-            "detect_prob": audio_conf,
+            "detect_prob": conf,
             "asr_text": asr_text,
-            "target_lang": target_lang_name
+            "target_lang": target_lang_name,
+            "lid_method": method
         })
         
         # --- DECISION LOGIC ---
         should_translate = True
         
-        if audio_conf < 0.50:
-            # Very low confidence -> Assume hallucination/error -> FORCE TRANSLATE
-            logger.info(f"[{trace_id}] Segment {segment['id']} Low Conf ({audio_conf:.2f}) -> Force TRANSLATE")
+        if conf < 0.50:
+            logger.info(f"[{trace_id}] Segment {segment['id']} Low Conf ({conf:.2f}) -> Force TRANSLATE")
             should_translate = True
-            # Override detected lang to Source Lang if we are forcing translation due to low conf
             if detected_lang_name == "UNKNOWN":
                  detected_lang_name = get_language_name(src_lang)
 
@@ -317,9 +323,9 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
             # Potential Match? Check for lies.
             is_hindi_target = (target_lang_name.lower() == "hindi")
             
-            if contains_english(asr_text) and target_lang_name.lower() != "english":
+            if contains_english_script(asr_text) and target_lang_name.lower() != "english":
                 # English words in non-English target -> Hallucination -> TRANSLATE
-                logger.info(f"[{trace_id}] Segment {segment['id']} English Detected in {target_lang_name} -> Force TRANSLATE")
+                logger.info(f"[{trace_id}] Segment {segment['id']} English Script Detected in {target_lang_name} -> Force TRANSLATE")
                 should_translate = True
                 detected_lang_name = "English" # Update for translator
                 
@@ -331,8 +337,6 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
                 
             elif src_lang.lower() != target_lang_name.lower():
                 # Source is NOT target, but we detected Target.
-                # Likely hallucination (e.g. Source English, Detected Hindi, Target Hindi).
-                # Force Translate to ensure we don't just keep the English audio.
                 logger.info(f"[{trace_id}] Segment {segment['id']} Detected == Target but Source != Target -> Force TRANSLATE")
                 should_translate = True
                 detected_lang_name = get_language_name(src_lang) # Trust Source Lang over extraction
@@ -374,12 +378,32 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
         else:
             segment["action"] = "KEEP"
 
-    logger.info(f"SEG_DONE: {segment['id']} | Action: {segment['action']}")
+    logger.info(f"SEG_DONE: {segment['id']} | Action: {segment['action']} | Lang: {detected_lang_name} ({method})")
     
-    # Progress Update (Fire and Forget)
-    REDIS_CLIENT.hincrby(config.PIPELINE_KEY_TEMPLATE.format(trace_id=trace_id), "segments_done", 1)
+    return _finalize_segment(trace_id, segment)
+
+def _finalize_segment(trace_id: str, segment: Dict[str, Any]):
+    """Helper to commit result to Redis and trigger merge if done."""
+    pipeline_key = config.PIPELINE_KEY_TEMPLATE.format(trace_id=trace_id)
+    results_key = f"{pipeline_key}:results"
     
-    # RETURN RESULT (Critical for Chord)
+    # Store result (Segment) as JSON
+    REDIS_CLIENT.hset(results_key, segment['id'], json.dumps(segment))
+    
+    # Increment global counter
+    completed = REDIS_CLIENT.hincrby(pipeline_key, "completed_segments_count", 1)
+    
+    # Check trigger
+    total_raw = REDIS_CLIENT.hget(pipeline_key, "total_segments")
+    total = int(total_raw) if total_raw else 0
+    
+    if completed >= total and total > 0:
+        logger.info(f"[{trace_id}] ALL SEGMENTS COMPLETE ({completed}/{total}). FIRING MERGE TASK.")
+        merge_final_video_task.apply_async(args=[trace_id], queue='merge')
+
+    # Also update 'segments_done' for frontend progress bar
+    REDIS_CLIENT.hincrby(pipeline_key, "segments_done", 1)
+    
     return segment
 
 # ==============================================================================
@@ -392,16 +416,26 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
     acks_late=False,
     max_retries=0
 )
-def merge_final_video_task(results: List[Dict], trace_id: str):
-    """ASSEMBLER: Receives results from Chord."""
+def merge_final_video_task(trace_id: str):
+    """ASSEMBLER: Receives trace_id, fetches segments from Redis, merges."""
     lock_key = config.ASSEMBLER_LOCK_TEMPLATE.format(trace_id=trace_id)
     if not REDIS_CLIENT.set(lock_key, "1", nx=True, ex=config.LOCK_TTL):
         logger.warning(f"[{trace_id}] ASSEMBLER skipped (locked/done).")
         return {"status": "already_processed"}
         
     try:
-        logger.info(f"[{trace_id}] ASSEMBLER: START with {len(results or [])} results")
         pipeline_key = config.PIPELINE_KEY_TEMPLATE.format(trace_id=trace_id)
+        results_key = f"{pipeline_key}:results"
+        
+        logger.info(f"[{trace_id}] ASSEMBLER: START - Fetching results from Redis")
+        
+        # Fetch all results
+        raw_results = REDIS_CLIENT.hgetall(results_key)
+        results = []
+        for k, v in raw_results.items():
+            if v:
+                results.append(json.loads(v))
+        
         pipeline_data = REDIS_CLIENT.hgetall(pipeline_key)
         
         if not pipeline_data:
@@ -424,6 +458,8 @@ def merge_final_video_task(results: List[Dict], trace_id: str):
             seen.add(s['id'])
             validated.append(s)
             
+        logger.info(f"[{trace_id}] Assembling {len(validated)} segments...")
+            
         # Assemble
         from src.utils.media_engine import MediaEngine
         static_processed_dir = os.path.join(settings.BASE_DIR, "static", "processed")
@@ -435,11 +471,14 @@ def merge_final_video_task(results: List[Dict], trace_id: str):
         
         # Clean
         REDIS_CLIENT.delete(pipeline_key)
+        REDIS_CLIENT.delete(results_key)
         
         return {"video_url": f"processed/{out_name}", "trace_id": trace_id}
         
     except Exception as e:
         logger.error(f"[{trace_id}] ASSEMBLER FAILED: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     finally:
         REDIS_CLIENT.delete(lock_key)

@@ -36,10 +36,11 @@ class ModelManager:
             self._last_used[name] = time.time()
 
     def get_whisper(self) -> WhisperModel:
-        # Check first without lock (Performance optimization)
-        if "whisper" in self._models:
+        # Check first without lock (Atomic get to avoid race condition)
+        model = self._models.get("whisper")
+        if model:
             self.heartbeat("whisper")
-            return self._models["whisper"]
+            return model
             
         with self._lock:
             if "whisper" not in self._models:
@@ -71,9 +72,10 @@ class ModelManager:
             return self._models["whisper"]
 
     def get_diarization(self, hf_token: str = None) -> SpeakerAnalyzer:
-        if "diarization" in self._models:
+        model = self._models.get("diarization")
+        if model:
             self.heartbeat("diarization")
-            return self._models["diarization"]
+            return model
             
         with self._lock:
             if "diarization" not in self._models:
@@ -88,9 +90,10 @@ class ModelManager:
 
     def get_translator(self):
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-        if "translator" in self._models:
+        model = self._models.get("translator")
+        if model:
             self.heartbeat("translator")
-            return self._models["translator"]
+            return model
             
         with self._lock:
             if "translator" not in self._models:
@@ -124,9 +127,10 @@ class ModelManager:
     def get_separator(self):
         """Native Singleton for Audio Separation to avoid OOM in parallel Mode."""
         from audio_separator.separator import Separator
-        if "separator" in self._models:
+        model = self._models.get("separator")
+        if model:
             self.heartbeat("separator")
-            return self._models["separator"]
+            return model
         
         with self._lock:
             if "separator" not in self._models:
