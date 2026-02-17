@@ -115,6 +115,9 @@ class LanguageIdentifier:
         # Compare Text vs Audio
         hint = whisper_hint.lower()
         
+        # Normalize hint code
+        if hint == 'en-us' or hint == 'en-gb': hint = 'en'
+        
         if text_lang == hint:
             # Agreement
             confidence = max(text_conf, whisper_prob or 0.8)
@@ -122,18 +125,20 @@ class LanguageIdentifier:
 
         # Disagreement Handling
         
+        # SPECIAL: If Whisper hears English and text has English letters, TRUST WHISPER.
+        # This prevents "en" being detected as "hi", "tl", etc due to training noise.
+        if hint == 'en' and contains_english_script(text):
+            return 'en', max(whisper_prob or 0.9, text_conf), "audio_probe_priority_en"
+
         # CRITICAL: Trust Whisper if it hears a non-English language but text thinks it's English (Caption Bias)
         if hint != 'en' and (text_lang == 'en' or text_conf < 0.7):
             return hint, whisper_prob or 0.8, "audio_probe_priority"
 
         # Check for High Confidence Text Override
-        if text_conf > 0.85:
+        if text_conf > 0.92: # Increased threshold for override
              return text_lang, text_conf, "text_override"
 
-        # Check for common script mismatches (e.g. Hindi text but detected as English)
-        # (Already handled partly by FastText, but let's be safe)
-        
-        # Default fallback to Whisper if text is weak
+        # Default fallback to Whisper if text is weak or confusing
         return hint, whisper_prob or 0.5, "whisper_audio_fallback"
 
 def is_devanagari(text):

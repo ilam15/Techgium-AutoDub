@@ -659,7 +659,8 @@ class MediaEngine:
             "-c:v", "copy",  # No video re-encoding
             # "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # REMOVED: Can cause silence on Windows/short clips
             "-c:a", "aac",
-            "-b:a", "192k",  # Higher bitrate for better quality
+            "-b:a", "256k",  # Ultra-high bitrate for production quality
+            "-ar", "44100",  # High quality sample rate
             os.path.abspath(output_path)
         ]
         

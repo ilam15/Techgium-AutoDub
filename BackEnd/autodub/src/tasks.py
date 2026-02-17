@@ -191,10 +191,43 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     total_segments = len(processed_segments)
     REDIS_CLIENT.hset(pipeline_key, "total_segments", total_segments)
 
-    # 4. Dispatch with Manual Loop (One-by-One)
+    # 4. Global Speaker Analysis (Context-Aware Gender Detection)
+    # ------------------------------------------------------------------------------
+    # We analyze the entire vocal track ONCE to identify unique speakers and genders.
+    # This prevents the "segment-by-segment" misidentification.
+    try:
+        from src.utils.speaker_detection import SpeakerAnalyzer
+        logger.info(f"[{trace_id}] CONTROLLER: Running global speaker analysis...")
+        analyzer = SpeakerAnalyzer()
+        speaker_turns, speaker_genders = analyzer.analyze_audio(source_audio_path)
+        
+        # Attach speaker info to VAD segments
+        for seg in processed_segments:
+            assigned_spk = "UNKNOWN"
+            assigned_gender = None
+            max_overlap = -1
+            
+            for turn in speaker_turns:
+                # Calculate overlap between VAD segment and Diarization turn
+                overlap = min(seg.end, turn["end"]) - max(seg.start, turn["start"])
+                if overlap > max_overlap:
+                    max_overlap = overlap
+                    assigned_spk = turn["speaker"]
+                    assigned_gender = speaker_genders.get(assigned_spk)
+            
+            # Store in segment object
+            setattr(seg, "speaker_id", assigned_spk)
+            setattr(seg, "assigned_gender", assigned_gender)
+            
+        logger.info(f"[{trace_id}] Global analysis mapped {len(speaker_genders)} speakers.")
+    except Exception as e:
+        logger.error(f"[{trace_id}] Global Speaker Analysis failed: {e}")
+
+    # 5. Dispatch with Manual Loop (One-by-One)
+    # ------------------------------------------------------------------------------
     if not processed_segments:
         logger.warning(f"[{trace_id}] No segments found. Triggering empty merge.")
-        merge_final_video_task.apply_async(args=[trace_id], queue='merge') # Pass just trace_id
+        merge_final_video_task.apply_async(args=[trace_id], queue='merge')
         return {"total_segments": 0}
 
     # Initialize counter
@@ -203,7 +236,7 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
     results_key = f"{pipeline_key}:results"
     REDIS_CLIENT.delete(results_key)
 
-    logger.info(f"[{trace_id}] Dispatching {total_segments} tasks manually (One-by-One)")
+    logger.info(f"[{trace_id}] Dispatching {total_segments} tasks with Speaker Analysis context.")
     
     for idx, seg in enumerate(processed_segments):
         seg_data = {
@@ -213,9 +246,11 @@ def separation_task(self, input_file: str, src_lang: str, dst_lang: str, gender:
             "duration": seg.end - seg.start,
             "text_hint": seg.text.strip(),
             "trace_id": trace_id,
-            "source_audio_path": source_audio_path
+            "source_audio_path": source_audio_path,
+            "speaker_id": getattr(seg, "speaker_id", "UNKNOWN"),
+            "assigned_gender": getattr(seg, "assigned_gender", None)
         }
-        # Fire and Forget - "Send one by one"
+        # Fire and Forget
         segment_worker_task.apply_async(
             args=[seg_data, src_lang, dst_lang, gender],
             queue='analysis'
@@ -356,13 +391,24 @@ def segment_worker_task(segment: Dict[str, Any], src_lang: str, dst_lang: str, g
             except:
                 segment["translated_text"] = asr_text
 
-            # TTS
+            # TTS Generation
             tts_path = context.get_path(f"dub_{segment['id']}.wav")
             try:
-                analyzer = model_manager.get_diarization()
-                seg_gender = analyzer.identify_gender_for_segment(segment["source_audio_path"], segment["start"], segment["duration"])
-                if seg_gender == "Unknown": seg_gender = global_gender
+                # 1. Use assigned gender from global analysis if available
+                seg_gender = segment.get("assigned_gender")
+                
+                # 2. Fallback to per-segment detection ONLY if global failed or is unknown
+                if not seg_gender or seg_gender == "Unknown":
+                    logger.info(f"[{trace_id}] Segment {segment['id']} no global gender, running per-segment detector...")
+                    analyzer = model_manager.get_diarization()
+                    seg_gender = analyzer.identify_gender_for_segment(segment["source_audio_path"], segment["start"], segment["duration"])
+                
+                # 3. Final Fallback to global setting from UI
+                if not seg_gender or seg_gender == "Unknown": 
+                    seg_gender = global_gender
+                
                 seg_gender = seg_gender.capitalize()
+                logger.info(f"[{trace_id}] Segment {segment['id']} -> Vocal Type: {seg_gender}")
                 
                 final_tts = your_tts(
                     segment["translated_text"],

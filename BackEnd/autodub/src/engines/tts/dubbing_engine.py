@@ -89,56 +89,65 @@ def your_tts(text, lang, gender, audio_path, actual_duration, speed=1.0, tts_mod
             
             # If difference is > 50ms, we must stretch to ensure perfect lipsync
             if abs(current_dur_ms - target_dur_ms) > 50:
-                stretch_factor = current_dur_ms / target_dur_ms
-                logger.info(f"⏳ Sync needed: {current_dur_ms}ms -> {target_dur_ms}ms (Raw factor: {stretch_factor:.2f}x)")
-                
-                # Point 7: Cap Time-Stretch Ratio
-                if stretch_factor > settings.TTS_SPEED_CAP:
-                    logger.warning(f"Capping speedup: {stretch_factor:.2f}x -> {settings.TTS_SPEED_CAP}x (Max Limit)")
-                    stretch_factor = settings.TTS_SPEED_CAP
-                elif stretch_factor < settings.TTS_SLOW_DOWN_CAP:
-                     logger.warning(f"Capping slowdown: {stretch_factor:.2f}x -> {settings.TTS_SLOW_DOWN_CAP}x (Min Limit)")
-                     stretch_factor = settings.TTS_SLOW_DOWN_CAP
-                
-                # Use FFmpeg atempo for high-quality time stretching without pitch shift
-                stretched_path = tts_path.replace(".wav", "_stretched.wav")
-                atempo = f"atempo={stretch_factor}"
-                
-                cmd = [
-                    MediaEngine.FFMPEG_PATH, "-y", "-i", tts_path,
-                    "-filter:a", atempo,
-                    "-ar", "44100",
-                    "-loglevel", "error", # Quieter logging
-                    stretched_path
-                ]
-                subprocess.run(cmd, capture_output=True, check=True)
-                tts_path = stretched_path
+                    stretch_factor = current_dur_ms / target_dur_ms
+                    logger.info(f"⏳ Sync needed: {current_dur_ms}ms -> {target_dur_ms}ms (Raw factor: {stretch_factor:.3f}x)")
+                    
+                    # Point 7: Cap Time-Stretch Ratio
+                    if stretch_factor > settings.TTS_SPEED_CAP:
+                        logger.warning(f"Capping speedup: {stretch_factor:.2f}x -> {settings.TTS_SPEED_CAP}x")
+                        stretch_factor = settings.TTS_SPEED_CAP
+                    elif stretch_factor < settings.TTS_SLOW_DOWN_CAP:
+                         logger.warning(f"Capping slowdown: {stretch_factor:.2f}x -> {settings.TTS_SLOW_DOWN_CAP}x")
+                         stretch_factor = settings.TTS_SLOW_DOWN_CAP
+                    
+                    # Use FFmpeg atempo with higher precision (multiple filters if factor > 2.0)
+                    stretched_path = tts_path.replace(".wav", "_stretched.wav")
+                    
+                    # FFmpeg atempo only supports 0.5 to 2.0. Chain them if needed.
+                    filters = []
+                    temp_f = stretch_factor
+                    while temp_f > 2.0:
+                        filters.append("atempo=2.0")
+                        temp_f /= 2.0
+                    while temp_f < 0.5:
+                        filters.append("atempo=0.5")
+                        temp_f *= 2.0
+                    filters.append(f"atempo={temp_f:.4f}")
+                    
+                    filter_str = ",".join(filters)
+                    
+                    cmd = [
+                        MediaEngine.FFMPEG_PATH, "-y", "-i", tts_path,
+                        "-filter:a", filter_str,
+                        "-ar", "44100",
+                        "-loglevel", "error",
+                        stretched_path
+                    ]
+                    subprocess.run(cmd, capture_output=True, check=True)
+                    tts_path = stretched_path
 
         if tts_path and os.path.exists(tts_path):
-            # Final Precision Sync (Lipsync Guard)
-            # Ensures the final audio segment matches the expected duration exactly.
-            # This prevents accumulative drift where small errors add up to seconds of offset.
             try:
                 final_audio = AudioSegment.from_file(tts_path)
                 current_len = len(final_audio)
                 
                 # We target milliseconds for maximum precision
-                if abs(current_len - target_dur_ms) > 5 or final_audio.frame_rate != 44100: 
-                    logger.info(f"📏 Finalizing Sync: {current_len}ms -> {target_dur_ms}ms (Precision padding/trim + 44.1kHz normalization)")
+                if abs(current_len - target_dur_ms) > 2 or final_audio.frame_rate != 44100: 
+                    logger.info(f"📏 Finalizing Sync: {current_len}ms -> {target_dur_ms}ms (Precision padding/cross-fade sync)")
                     
-                    # Normalize frame rate first for consistency
                     if final_audio.frame_rate != 44100:
                         final_audio = final_audio.set_frame_rate(44100)
                         
                     if current_len > target_dur_ms:
-                        # FIX: Do NOT trim speech. Trimming causes word loss. 
-                        # In the Overlay model, it's safer to let it bleed/overlap.
-                        # We only trim if it's extremely long (e.g. > 2x original) as a safety.
-                        if current_len > target_dur_ms * 2:
-                            logger.warning(f"⚠️ Segment extremely long ({current_len}ms vs {target_dur_ms}ms). Trimming to 2x.")
-                            final_audio = final_audio[:target_dur_ms * 2]
+                        # If too long, we apply a tiny cross-fade out to prevent click/break
+                        # We only trim if it exceeds target by more than 100ms
+                        if current_len > target_dur_ms + 100:
+                             final_audio = final_audio.fade_out(50)[:target_dur_ms]
+                        else:
+                             # Just pad slightly to handle any weird alignment
+                             pass
                     else:
-                        # Pad with silence if too short (optional for overlay, but good for stability)
+                        # Pad with silence if too short
                         padding = AudioSegment.silent(duration=target_dur_ms - current_len, frame_rate=44100)
                         final_audio = final_audio + padding
                     

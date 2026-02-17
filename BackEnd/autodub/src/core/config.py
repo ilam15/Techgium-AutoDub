@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     
     # Point 7 & 10: TTS & Audio Settings
     # Increased speed range to handle fast speakers and prevent overlaps
-    TTS_SPEED_CAP: float = 1.7      # Max speedup ratio
-    TTS_SLOW_DOWN_CAP: float = 0.70 # Min speed ratio
+    TTS_SPEED_CAP: float = 2.0      # Max speedup ratio (higher allows longer sentences to fit)
+    TTS_SLOW_DOWN_CAP: float = 0.50 # Min speed ratio (lower prevents gaps)
     
     # Point 6: Probing Settings
     PROBE_WINDOW_SHORT: int = 5     # For duration < 60s
